@@ -17,6 +17,7 @@ export namespace main {
 	    kgs: string;
 	    s20: string;
 	    best_rating: string;
+	    silk_url: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Horse(source);
@@ -40,6 +41,7 @@ export namespace main {
 	        this.kgs = source["kgs"];
 	        this.s20 = source["s20"];
 	        this.best_rating = source["best_rating"];
+	        this.silk_url = source["silk_url"];
 	    }
 	}
 	export class Leg {

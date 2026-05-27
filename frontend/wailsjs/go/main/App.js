@@ -22,6 +22,10 @@ export function GetPredictions() {
   return window['go']['main']['App']['GetPredictions']();
 }
 
+export function GetProgramSilks(arg1, arg2) {
+  return window['go']['main']['App']['GetProgramSilks'](arg1, arg2);
+}
+
 export function Greet(arg1) {
   return window['go']['main']['App']['Greet'](arg1);
 }

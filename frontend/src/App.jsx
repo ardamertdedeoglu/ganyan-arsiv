@@ -6,10 +6,87 @@ import {
   DeletePrediction,
   UpdatePrediction,
   GetDailyPrograms,
+  GetProgramSilks,
   CheckForUpdate,
   PerformUpdate,
   GetAppVersion,
 } from "../wailsjs/go/main/App";
+
+function renderPerformance(last6) {
+  if (!last6) return <span className="text-gray-300 text-xs">—</span>;
+
+  // Pattern: (K|S|Ç|k|s|ç)([0-9]+)
+  const regex = /([KSÇksç])([0-9]+)/g;
+  let matches = [];
+  let match;
+  let lastIndex = 0;
+
+  while ((match = regex.exec(last6)) !== null) {
+    if (match.index > lastIndex) {
+      matches.push({
+        type: 'text',
+        value: last6.substring(lastIndex, match.index)
+      });
+    }
+    matches.push({
+      type: 'badge',
+      char: match[1].toUpperCase(),
+      num: match[2]
+    });
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < last6.length) {
+    matches.push({
+      type: 'text',
+      value: last6.substring(lastIndex)
+    });
+  }
+
+  if (matches.filter(m => m.type === 'badge').length === 0) {
+    return (
+      <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded font-mono text-xs font-bold tracking-wider">
+        {last6}
+      </span>
+    );
+  }
+
+  const colors = {
+    'K': '#996633', // Kum
+    'S': '#d39b1e', // Sentetik
+    'Ç': '#009900'  // Çim
+  };
+
+  const descriptions = {
+    'K': 'Kum',
+    'S': 'Sentetik',
+    'Ç': 'Çim'
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-1 font-mono text-xs font-bold">
+      {matches.map((item, idx) => {
+        if (item.type === 'text') {
+          return <span key={idx} className="text-gray-500 px-0.5">{item.value}</span>;
+        }
+
+        const bgColor = colors[item.char] || '#6b7280';
+        const label = descriptions[item.char] || item.char;
+
+        return (
+          <span
+            key={idx}
+            style={{ backgroundColor: bgColor }}
+            className="text-white w-5 h-5 rounded flex items-center justify-center text-[10px] shadow-sm font-bold border border-white/10"
+            title={`${label} ${item.num}`}
+          >
+            {item.num}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
 
 function App() {
   const [view, setView] = useState("list"); // 'list' | 'form' | 'program'
@@ -48,6 +125,9 @@ function App() {
   const [loadingProgram, setLoadingProgram] = useState(false);
   const [selectedProgramCity, setSelectedProgramCity] = useState(null);
   const [selectedRaceIndex, setSelectedRaceIndex] = useState(0);
+  // silks: city -> { raceIndex -> { horseNo -> silkURL } }
+  const [silks, setSilks] = useState({});
+  const [loadingSilks, setLoadingSilks] = useState(false);
 
   // Check for updates on mount
   useEffect(() => {
@@ -106,11 +186,14 @@ function App() {
     setPrograms([]);
     setSelectedProgramCity(null);
     setSelectedRaceIndex(0);
+    setSilks({});
     GetDailyPrograms(dateStr)
       .then((data) => {
         setPrograms(data || []);
         if (data && data.length > 0) {
           setSelectedProgramCity(data[0].city);
+          // Fetch silks for all cities in parallel
+          fetchAllSilks(data, dateStr);
         }
       })
       .catch((err) => {
@@ -119,6 +202,34 @@ function App() {
       .finally(() => {
         setLoadingProgram(false);
       });
+  }
+
+  function fetchAllSilks(programs, dateStr) {
+    setLoadingSilks(true);
+    const promises = programs.map((p) =>
+      GetProgramSilks(p.city, dateStr)
+        .then((result) => ({ city: p.city, data: result }))
+        .catch(() => ({ city: p.city, data: {} }))
+    );
+    Promise.all(promises).then((results) => {
+      const newSilks = {};
+      results.forEach(({ city, data }) => {
+        // Convert numeric keys from Go map to numbers
+        const normalized = {};
+        if (data) {
+          Object.keys(data).forEach((k) => {
+            normalized[parseInt(k)] = data[k];
+          });
+        }
+        newSilks[city] = normalized;
+      });
+      setSilks(newSilks);
+      setLoadingSilks(false);
+    });
+  }
+
+  function getSilkURL(city, raceIndex, horseNo) {
+    return silks?.[city]?.[raceIndex]?.[horseNo] || null;
   }
 
   function handleLegChange(index, value) {
@@ -371,6 +482,7 @@ function App() {
                           <thead>
                             <tr className="bg-gray-50 border-b border-gray-100 text-gray-500 font-bold uppercase tracking-wider text-xs">
                               <th className="p-3 w-10 text-center">No</th>
+                              <th className="p-3 w-14 text-center">Forma</th>
                               <th className="p-3">At İsmi / Yaş</th>
                               <th className="p-3">Kilo</th>
                               <th className="p-3">Jokey</th>
@@ -384,12 +496,34 @@ function App() {
                           <tbody className="divide-y divide-gray-50">
                             {selectedRace.horses &&
                               selectedRace.horses.map((horse, j) => (
-                                <tr
+                                 <tr
                                   key={j}
                                   className="hover:bg-emerald-50/50 transition-colors"
                                 >
                                   <td className="p-3 font-bold text-center text-gray-400 text-base">
                                     {horse.horse_no}
+                                  </td>
+                                  {/* Forma / Silk */}
+                                  <td className="p-2 text-center">
+                                    {(() => {
+                                      const silkURL = getSilkURL(p.city, selectedRaceIndex, horse.horse_no);
+                                      if (silkURL) {
+                                        return (
+                                          <img
+                                            src={silkURL}
+                                            alt={`Forma ${horse.horse_no}`}
+                                            className="h-8 w-auto object-contain rounded mx-auto"
+                                            onError={(e) => { e.target.style.display = 'none'; }}
+                                          />
+                                        );
+                                      } else if (loadingSilks) {
+                                        return (
+                                          <div className="w-6 h-6 mx-auto rounded-full border-2 border-gray-200 border-t-emerald-400 animate-spin" />
+                                        );
+                                      } else {
+                                        return <span className="text-gray-300 text-xs">—</span>;
+                                      }
+                                    })()}
                                   </td>
                                   <td className="p-3">
                                     <div className="font-bold text-gray-800 text-base">
@@ -452,12 +586,7 @@ function App() {
                                   <td className="p-3">
                                     <div className="flex flex-col gap-1">
                                       <div className="flex items-center gap-2">
-                                        <span
-                                          className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded font-mono text-xs font-bold tracking-wider"
-                                          title="Son 6 Yarış / Derece"
-                                        >
-                                          {horse.last6}
-                                        </span>
+                                        {renderPerformance(horse.last6)}
                                       </div>
                                       {(horse.kgs || horse.s20) && (
                                         <div className="text-xs text-gray-400">

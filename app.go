@@ -51,3 +51,10 @@ func (a *App) GetDailyPrograms(date string) ([]RaceProgram, error) {
 	programs := FetchAllPrograms(date)
 	return programs, nil
 }
+
+// GetProgramSilks fetches jockey silk image URLs for a specific city and date from the TJK website.
+// Returns a map of raceIndex -> horseNo -> silkURL
+func (a *App) GetProgramSilks(city, date string) (map[int]map[string]string, error) {
+	return FetchSilks(city, date)
+}
+

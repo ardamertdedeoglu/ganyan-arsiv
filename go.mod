@@ -3,6 +3,7 @@ module ganyan-arsiv
 go 1.25.0
 
 require (
+	github.com/PuerkitoBio/goquery v1.12.0
 	github.com/creativeprojects/go-selfupdate v1.5.2
 	github.com/wailsapp/wails/v2 v2.12.0
 	modernc.org/sqlite v1.50.1
@@ -13,6 +14,7 @@ require (
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
 	github.com/42wim/httpsig v1.2.3 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
+	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -48,8 +50,8 @@ require (
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
 	gitlab.com/gitlab-org/api/client-go v1.9.1 // indirect
-	golang.org/x/crypto v0.46.0 // indirect
-	golang.org/x/net v0.47.0 // indirect
+	golang.org/x/crypto v0.49.0 // indirect
+	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.37.0 // indirect

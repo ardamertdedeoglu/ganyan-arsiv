@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
 )
 
 type Horse struct {
@@ -26,6 +29,7 @@ type Horse struct {
 	KGS        string `json:"kgs"`
 	S20        string `json:"s20"`
 	BestRating string `json:"best_rating"`
+	SilkURL    string `json:"silk_url"`
 }
 
 type Race struct {
@@ -41,6 +45,20 @@ type RaceProgram struct {
 	City  string `json:"city"`
 	Date  string `json:"date"`
 	Races []Race `json:"races"`
+}
+
+// cityToSehirID maps Turkish city names (as used in CSV) to TJK website SehirId values
+var cityToSehirID = map[string]int{
+	"İstanbul":  3,
+	"Ankara":    1,
+	"İzmir":     2,
+	"Adana":     4,
+	"Bursa":     5,
+	"Kocaeli":   6,
+	"Antalya":   7,
+	"Şanlıurfa": 8,
+	"Elazığ":    9,
+	"Diyarbakır": 10,
 }
 
 func buildURL(city, dateStr string) string {
@@ -223,4 +241,108 @@ func FetchAllPrograms(date string) []RaceProgram {
 		}
 	}
 	return programs
+}
+
+// FetchSilks scrapes jockey silk image URLs for all races of a given city on a given date.
+// Returns a map: raceIndex (0-based) -> horseNo -> silkURL
+func FetchSilks(city, date string) (map[int]map[string]string, error) {
+	sehirID, ok := cityToSehirID[city]
+	if !ok {
+		return nil, fmt.Errorf("unknown city: %s", city)
+	}
+
+	parsedDate, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return nil, fmt.Errorf("invalid date: %s", date)
+	}
+	ddmmyyyy := parsedDate.Format("02/01/2006")
+
+	targetURL := fmt.Sprintf(
+		"https://www.tjk.org/TR/YarisSever/Info/Sehir/GunlukYarisProgrami?SehirId=%d&QueryParameter_Tarih=%s&SehirAdi=%s&Era=today",
+		sehirID,
+		url.QueryEscape(ddmmyyyy),
+		url.QueryEscape(city),
+	)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, err := http.NewRequest("GET", targetURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("Accept-Language", "tr-TR,tr;q=0.9")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d from TJK", resp.StatusCode)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Result: raceIndex -> horseNo -> silkURL
+	result := make(map[int]map[string]string)
+	raceIndex := 0
+
+	// Each race is inside a div under div.races-panes with numeric id (koşu kodu)
+	doc.Find("div.races-panes > div[id]").Each(func(_ int, raceDiv *goquery.Selection) {
+		id, exists := raceDiv.Attr("id")
+		if !exists || id == "" || id == "all" {
+			return
+		}
+
+		horseMap := make(map[string]string)
+
+		// Each horse row in the table
+		raceDiv.Find("tr").Each(func(_ int, row *goquery.Selection) {
+			// Get horse number from SiraId cell
+			horseNo := strings.TrimSpace(row.Find("td.gunluk-GunlukYarisProgrami-SiraId").Text())
+			// Get silk URL from FormaKodu cell's anchor href
+			silkURL, _ := row.Find("td.gunluk-GunlukYarisProgrami-FormaKodu a").Attr("href")
+
+			if horseNo != "" && silkURL != "" {
+				horseMap[horseNo] = silkURL
+			}
+		})
+
+		if len(horseMap) > 0 {
+			result[raceIndex] = horseMap
+			raceIndex++
+		}
+	})
+
+	return result, nil
+}
+
+// MergeSilksIntoProgram merges silk URLs fetched from the website into a parsed program
+func MergeSilksIntoProgram(prog *RaceProgram) {
+	if prog == nil {
+		return
+	}
+
+	silks, err := FetchSilks(prog.City, prog.Date)
+	if err != nil {
+		// Silks not critical - log and continue without them
+		return
+	}
+
+	for raceIdx := range prog.Races {
+		horseMap, ok := silks[raceIdx]
+		if !ok {
+			continue
+		}
+		for horseIdx := range prog.Races[raceIdx].Horses {
+			no := prog.Races[raceIdx].Horses[horseIdx].HorseNo
+			if silkURL, ok := horseMap[no]; ok {
+				prog.Races[raceIdx].Horses[horseIdx].SilkURL = silkURL
+			}
+		}
+	}
 }

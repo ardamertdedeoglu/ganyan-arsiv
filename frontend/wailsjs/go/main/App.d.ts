@@ -12,6 +12,8 @@ export function GetDailyPrograms(arg1:string):Promise<Array<main.RaceProgram>>;
 
 export function GetPredictions():Promise<Array<main.Prediction>>;
 
+export function GetProgramSilks(arg1:string,arg2:string):Promise<Record<number, Record<string, string>>>;
+
 export function Greet(arg1:string):Promise<string>;
 
 export function PerformUpdate():Promise<main.UpdateResult>;
