@@ -178,11 +178,11 @@ export namespace main {
 	    currentVersion: string;
 	    latestVersion: string;
 	    message: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new UpdateResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.updateAvailable = source["updateAvailable"];
