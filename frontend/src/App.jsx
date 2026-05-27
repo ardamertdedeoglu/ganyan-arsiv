@@ -4,6 +4,7 @@ import {
   SavePrediction,
   GetPredictions,
   DeletePrediction,
+  UpdatePrediction,
   GetDailyPrograms,
   CheckForUpdate,
   PerformUpdate,
@@ -20,10 +21,9 @@ function App() {
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const [appVersion, setAppVersion] = useState("");
 
-  // Form state
+  // Form state (yeni tahmin oluşturma)
   const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
   const [city, setCity] = useState("İstanbul");
-  const [raceTime, setRaceTime] = useState("18:00");
   const [legs, setLegs] = useState([
     { leg_number: 1, predictions: "" },
     { leg_number: 2, predictions: "" },
@@ -32,6 +32,13 @@ function App() {
     { leg_number: 5, predictions: "" },
     { leg_number: 6, predictions: "" },
   ]);
+
+  // Edit state (mevcut tahmin düzenleme)
+  const [editingPrediction, setEditingPrediction] = useState(null);
+  const [editDate, setEditDate] = useState("");
+  const [editCity, setEditCity] = useState("");
+  const [editIsCompleted, setEditIsCompleted] = useState(false);
+  const [editLegs, setEditLegs] = useState([]);
 
   // Program state
   const [programDate, setProgramDate] = useState(
@@ -72,10 +79,8 @@ function App() {
       .then((result) => {
         setUpdateInfo(result);
         if (!result.updateAvailable) {
-          // Update succeeded
           setUpdating(false);
         } else {
-          // Update failed but still available
           setUpdating(false);
         }
       })
@@ -118,7 +123,7 @@ function App() {
 
   function handleLegChange(index, value) {
     const newLegs = [...legs];
-    const val = value.replace(/[^0-9, ]/g, ""); // Sadece sayı, virgül ve boşluk
+    const val = value.replace(/[^0-9, ]/g, "");
     newLegs[index].predictions = val;
     setLegs(newLegs);
   }
@@ -141,7 +146,7 @@ function App() {
     const p = {
       date: date,
       city: city,
-      race_time: raceTime,
+      race_time: "",
       is_completed: false,
       legs: parsedLegs,
     };
@@ -168,16 +173,81 @@ function App() {
     }
   }
 
-  // At numaralarını daire içinde göstermek için yardımcı fonksiyon
-  const renderHorseBadges = (predictions) => {
-    if (!predictions || predictions.length === 0)
-      return <span className="text-gray-400">-</span>;
+  // --- EDIT functions ---
+  function startEditing(p) {
+    setEditingPrediction(p);
+    setEditDate(p.date ? p.date.split("T")[0] : "");
+    setEditCity(p.city);
+    setEditIsCompleted(p.is_completed);
+    // Convert legs predictions arrays to comma-separated strings
+    setEditLegs(
+      (p.legs || []).map((leg) => ({
+        leg_number: leg.leg_number,
+        predictions: (leg.predictions || []).join(", "),
+        winner_horse: leg.winner_horse || 0,
+      })),
+    );
+  }
+
+  function cancelEditing() {
+    setEditingPrediction(null);
+  }
+
+  function handleEditLegChange(index, value) {
+    const newLegs = [...editLegs];
+    const val = value.replace(/[^0-9, ]/g, "");
+    newLegs[index].predictions = val;
+    setEditLegs(newLegs);
+  }
+
+  function handleEditWinnerChange(index, value) {
+    const newLegs = [...editLegs];
+    newLegs[index].winner_horse = parseInt(value, 10) || 0;
+    setEditLegs(newLegs);
+  }
+
+  function handleEditSave() {
+    const parsedLegs = editLegs.map((leg) => {
+      const arr = leg.predictions
+        .split(",")
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => !isNaN(n));
+      return {
+        leg_number: leg.leg_number,
+        predictions: arr,
+        winner_horse: leg.winner_horse || 0,
+      };
+    });
+
+    const updated = {
+      id: editingPrediction.id,
+      date: editDate,
+      city: editCity,
+      race_time: editingPrediction.race_time || "",
+      is_completed: editIsCompleted,
+      legs: parsedLegs,
+    };
+
+    UpdatePrediction(updated)
+      .then(() => {
+        setEditingPrediction(null);
+        loadPredictions();
+      })
+      .catch((err) => {
+        alert("Güncellenemedi: " + err);
+      });
+  }
+
+  // At numaralarını SÜTUN halinde göstermek için yardımcı fonksiyon
+  const renderHorseBadges = (preds) => {
+    if (!preds || preds.length === 0)
+      return <span className="text-gray-400 text-sm">-</span>;
     return (
-      <div className="flex flex-wrap gap-2 justify-start mt-2">
-        {predictions.map((p, idx) => (
+      <div className="flex flex-col gap-1.5 mt-1">
+        {preds.map((p, idx) => (
           <div
             key={idx}
-            className="w-10 h-10 flex items-center justify-center bg-white border-2 border-emerald-500 text-emerald-700 font-bold rounded-full shadow-sm"
+            className="w-9 h-9 flex items-center justify-center bg-white border-2 border-emerald-500 text-emerald-700 font-bold rounded-full shadow-sm text-sm"
           >
             {p}
           </div>
@@ -262,11 +332,6 @@ function App() {
                             <span>
                               {race.race_name.split(":")[0] || `${i + 1}. Koşu`}
                             </span>
-                            <span
-                              className={`text-xs ${selectedRaceIndex === i ? "text-emerald-300" : "text-slate-400"}`}
-                            >
-                              {race.time}
-                            </span>
                           </div>
                         </button>
                       ))}
@@ -281,12 +346,20 @@ function App() {
                           <h3 className="font-bold text-xl">
                             {selectedRace.race_name}
                           </h3>
-                          <div className="text-sm text-slate-300 flex items-center gap-2 mt-1.5">
-                            <span>⏱️ {selectedRace.time}</span>
-                            <span>•</span>
-                            <span className="font-semibold text-emerald-300">
-                              {selectedRace.condition}
-                            </span>
+                          <div className="text-sm text-slate-300 flex flex-wrap items-center gap-2 mt-1.5">
+                            {selectedRace.condition && (
+                              <span className="font-semibold text-emerald-300">
+                                {selectedRace.condition}
+                              </span>
+                            )}
+                            {selectedRace.age_group && (
+                              <>
+                                <span>•</span>
+                                <span className="bg-slate-700 text-amber-300 px-2 py-0.5 rounded-md text-xs font-bold border border-slate-600">
+                                  {selectedRace.age_group}
+                                </span>
+                              </>
+                            )}
                           </div>
                         </div>
                         <div className="text-sm font-medium bg-slate-700 px-4 py-2 rounded-xl border border-slate-600">
@@ -421,8 +494,133 @@ function App() {
     );
   }
 
+  // --- Edit Modal ---
+  function renderEditModal() {
+    if (!editingPrediction) return null;
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+        <div className="bg-white rounded-3xl shadow-2xl border border-gray-100 w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto animate-in slide-in-from-bottom-4 duration-300">
+          <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+            <h2 className="text-xl font-bold text-gray-800">Tahmini Düzenle</h2>
+            <button
+              onClick={cancelEditing}
+              className="text-gray-400 hover:text-gray-600 p-2 rounded-xl hover:bg-gray-100 transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <div className="p-6 space-y-6">
+            {/* Temel Bilgiler */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-gray-50 p-4 rounded-2xl border border-gray-100">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Tarih</label>
+                <input
+                  type="date"
+                  value={editDate}
+                  onChange={(e) => setEditDate(e.target.value)}
+                  className="w-full bg-white border border-gray-200 rounded-xl p-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Şehir</label>
+                <select
+                  value={editCity}
+                  onChange={(e) => setEditCity(e.target.value)}
+                  className="w-full bg-white border border-gray-200 rounded-xl p-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                >
+                  <option value="İstanbul">İstanbul</option>
+                  <option value="Ankara">Ankara</option>
+                  <option value="İzmir">İzmir</option>
+                  <option value="Adana">Adana</option>
+                  <option value="Bursa">Bursa</option>
+                  <option value="Kocaeli">Kocaeli</option>
+                  <option value="Antalya">Antalya</option>
+                  <option value="Şanlıurfa">Şanlıurfa</option>
+                  <option value="Elazığ">Elazığ</option>
+                  <option value="Diyarbakır">Diyarbakır</option>
+                </select>
+              </div>
+              <div className="sm:col-span-2">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <div
+                    onClick={() => setEditIsCompleted(!editIsCompleted)}
+                    className={`relative w-11 h-6 rounded-full transition-colors ${editIsCompleted ? "bg-emerald-500" : "bg-gray-300"}`}
+                  >
+                    <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform ${editIsCompleted ? "translate-x-5" : "translate-x-0"}`} />
+                  </div>
+                  <span className="text-sm font-semibold text-gray-700">
+                    {editIsCompleted ? "✓ Sonuçlandı" : "⏱ Sonuç Bekleniyor"}
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            {/* Ayaklar */}
+            <div>
+              <h3 className="font-bold text-base text-gray-800 mb-3">Ayak Tahminleri</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {editLegs.map((leg, i) => (
+                  <div
+                    key={i}
+                    className="bg-gray-50 border border-gray-200 rounded-2xl p-3 space-y-2 focus-within:ring-2 focus-within:ring-emerald-200 transition-all"
+                  >
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-emerald-600 uppercase tracking-wider">
+                        {leg.leg_number}. Ayak
+                      </label>
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs text-gray-400">Kazanan:</span>
+                        <input
+                          type="number"
+                          min="0"
+                          value={leg.winner_horse || ""}
+                          onChange={(e) => handleEditWinnerChange(i, e.target.value)}
+                          placeholder="0"
+                          className="w-14 text-xs bg-white border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-400 text-center font-bold"
+                        />
+                      </div>
+                    </div>
+                    <input
+                      type="text"
+                      value={leg.predictions}
+                      onChange={(e) => handleEditLegChange(i, e.target.value)}
+                      placeholder="Örn: 5, 3, 1, 12"
+                      className="w-full text-sm bg-white border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-400"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="p-6 border-t border-gray-100 flex gap-3 justify-end">
+            <button
+              onClick={cancelEditing}
+              className="px-5 py-2.5 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition-colors text-sm"
+            >
+              İptal
+            </button>
+            <button
+              onClick={handleEditSave}
+              className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-colors text-sm shadow-md"
+            >
+              Kaydet
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 text-left font-sans py-8">
+      {/* Edit Modal */}
+      {renderEditModal()}
+
       {/* Update Notification Banner */}
       {updateInfo && updateInfo.updateAvailable && !updateDismissed && (
         <div className="fixed top-0 left-0 right-0 z-50 animate-in fade-in slide-in-from-top-4 duration-500">
@@ -474,9 +672,7 @@ function App() {
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              <span className="font-semibold text-sm">
-                {updateInfo.message}
-              </span>
+              <span className="font-semibold text-sm">{updateInfo.message}</span>
             </div>
           </div>
         </div>
@@ -550,7 +746,7 @@ function App() {
             </div>
 
             <form onSubmit={handleSave}>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 bg-gray-50 p-6 rounded-2xl border border-gray-100">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 bg-gray-50 p-6 rounded-2xl border border-gray-100">
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-gray-700 uppercase tracking-wider">
                     Tarih
@@ -584,18 +780,6 @@ function App() {
                     <option value="Elazığ">Elazığ</option>
                     <option value="Diyarbakır">Diyarbakır</option>
                   </select>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-gray-700 uppercase tracking-wider">
-                    Saat
-                  </label>
-                  <input
-                    type="time"
-                    value={raceTime}
-                    onChange={(e) => setRaceTime(e.target.value)}
-                    required
-                    className="w-full bg-white border border-gray-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500 transition-shadow"
-                  />
                 </div>
               </div>
 
@@ -675,27 +859,39 @@ function App() {
                   >
                     <div className="absolute top-0 left-0 w-2 h-full bg-emerald-500"></div>
 
-                    <button
-                      onClick={() => handleDelete(p.id)}
-                      className="absolute top-6 right-6 text-gray-400 hover:text-red-500 bg-gray-50 hover:bg-red-50 p-2 rounded-full transition-colors opacity-0 group-hover:opacity-100"
-                      title="Sil"
-                    >
-                      <svg
-                        className="w-5 h-5"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
+                    {/* Action buttons */}
+                    <div className="absolute top-6 right-6 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => startEditing(p)}
+                        className="text-gray-400 hover:text-emerald-600 bg-gray-50 hover:bg-emerald-50 p-2 rounded-full transition-colors"
+                        title="Düzenle"
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                        />
-                      </svg>
-                    </button>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => handleDelete(p.id)}
+                        className="text-gray-400 hover:text-red-500 bg-gray-50 hover:bg-red-50 p-2 rounded-full transition-colors"
+                        title="Sil"
+                      >
+                        <svg
+                          className="w-5 h-5"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                          />
+                        </svg>
+                      </button>
+                    </div>
 
-                    <div className="flex flex-col md:flex-row md:items-center gap-4 mb-6 pr-12 pl-4">
+                    <div className="flex flex-col md:flex-row md:items-center gap-4 mb-6 pr-24 pl-4">
                       <div>
                         <h3 className="text-2xl font-extrabold text-gray-800">
                           {p.city}
@@ -717,22 +913,6 @@ function App() {
                             </svg>
                             {p.date.split("T")[0]}
                           </span>
-                          <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-md text-sm font-semibold flex items-center gap-1">
-                            <svg
-                              className="w-4 h-4"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                              />
-                            </svg>
-                            {p.race_time}
-                          </span>
                         </div>
                       </div>
                       <div className="md:ml-auto">
@@ -746,17 +926,26 @@ function App() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 pl-4">
+                    {/* Legs - alt alta dizili at numaraları */}
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-4 pl-4">
                       {p.legs &&
                         p.legs.map((leg, i) => (
                           <div
                             key={i}
-                            className="bg-gray-50 border border-gray-100 rounded-2xl p-4 transition-colors hover:bg-emerald-50"
+                            className="bg-gray-50 border border-gray-100 rounded-2xl p-3 transition-colors hover:bg-emerald-50"
                           >
                             <div className="text-xs font-black text-gray-400 uppercase tracking-widest mb-1">
                               {leg.leg_number}. Ayak
                             </div>
                             {renderHorseBadges(leg.predictions)}
+                            {leg.winner_horse > 0 && (
+                              <div className="mt-2 flex items-center gap-1">
+                                <span className="text-xs text-gray-400">Kazanan:</span>
+                                <span className="w-6 h-6 flex items-center justify-center bg-indigo-100 text-indigo-700 font-bold rounded-full text-xs border border-indigo-200">
+                                  {leg.winner_horse}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         ))}
                     </div>

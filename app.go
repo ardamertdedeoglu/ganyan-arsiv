@@ -41,6 +41,11 @@ func (a *App) DeletePrediction(id int64) error {
 	return deletePredictionFromDB(id)
 }
 
+// UpdatePrediction updates an existing prediction in the database
+func (a *App) UpdatePrediction(p Prediction) error {
+	return updatePredictionInDB(p)
+}
+
 // GetDailyPrograms fetches daily race programs for a given date from the TJK website
 func (a *App) GetDailyPrograms(date string) ([]RaceProgram, error) {
 	programs := FetchAllPrograms(date)

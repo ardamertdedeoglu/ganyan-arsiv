@@ -32,6 +32,7 @@ type Race struct {
 	RaceName  string  `json:"race_name"`
 	Time      string  `json:"time"`
 	Condition string  `json:"condition"`
+	AgeGroup  string  `json:"age_group"`
 	Distance  string  `json:"distance"`
 	Horses    []Horse `json:"horses"`
 }
@@ -90,6 +91,11 @@ func parseCSVProgram(city, date string, r io.Reader) *RaceProgram {
 
 			if len(record) > 1 {
 				currentRace.Condition = strings.TrimSpace(record[1])
+			}
+
+			// record[2] contains the age/breed group e.g. "4 ve Yukarı Araplar"
+			if len(record) > 2 {
+				currentRace.AgeGroup = strings.TrimSpace(record[2])
 			}
 
 			// Capture distance/track details and format cleanly

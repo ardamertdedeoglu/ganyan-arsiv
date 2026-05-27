@@ -33,3 +33,7 @@ export function PerformUpdate() {
 export function SavePrediction(arg1) {
   return window['go']['main']['App']['SavePrediction'](arg1);
 }
+
+export function UpdatePrediction(arg1) {
+  return window['go']['main']['App']['UpdatePrediction'](arg1);
+}

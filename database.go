@@ -106,3 +106,14 @@ func deletePredictionFromDB(id int64) error {
 	_, err := db.Exec(`DELETE FROM predictions WHERE id = ?`, id)
 	return err
 }
+
+func updatePredictionInDB(p Prediction) error {
+	legsJSON, err := json.Marshal(p.Legs)
+	if err != nil {
+		return err
+	}
+
+	query := `UPDATE predictions SET date = ?, city = ?, race_time = ?, is_completed = ?, legs = ? WHERE id = ?`
+	_, err = db.Exec(query, p.Date, p.City, p.RaceTime, p.IsCompleted, string(legsJSON), p.ID)
+	return err
+}

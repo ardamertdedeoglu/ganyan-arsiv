@@ -105,6 +105,7 @@ export namespace main {
 	    race_name: string;
 	    time: string;
 	    condition: string;
+	    age_group: string;
 	    distance: string;
 	    horses: Horse[];
 	
@@ -117,6 +118,7 @@ export namespace main {
 	        this.race_name = source["race_name"];
 	        this.time = source["time"];
 	        this.condition = source["condition"];
+	        this.age_group = source["age_group"];
 	        this.distance = source["distance"];
 	        this.horses = this.convertValues(source["horses"], Horse);
 	    }

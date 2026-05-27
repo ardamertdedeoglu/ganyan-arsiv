@@ -17,3 +17,5 @@ export function Greet(arg1:string):Promise<string>;
 export function PerformUpdate():Promise<main.UpdateResult>;
 
 export function SavePrediction(arg1:main.Prediction):Promise<void>;
+
+export function UpdatePrediction(arg1:main.Prediction):Promise<void>;
