@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Build Application
+        run: |
+          wails build -ldflags "-X main.version=${{ github.ref_name }}"
+
+      - name: Package
+        run: |
+          Compress-Archive -Path ./build/bin/ganyan-arsiv.exe -DestinationPath ganyan-arsiv_${{ github.ref_name }}_windows_amd64.zip
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ganyan-arsiv-windows
+          path: ganyan-arsiv_${{ github.ref_name }}_windows_amd64.zip
+
+  release:
+    needs: [build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./artifacts/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
