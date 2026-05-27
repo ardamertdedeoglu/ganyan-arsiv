@@ -99,12 +99,26 @@ func parseCSVProgram(city, date string, r io.Reader) *RaceProgram {
 				prog.Races = append(prog.Races, *currentRace)
 			}
 			currentRace = &Race{}
-			parts := strings.Split(firstCol, ":")
-			if len(parts) >= 2 {
-				currentRace.RaceName = strings.TrimSpace(parts[0])
-				currentRace.Time = strings.TrimSpace(parts[1])
+			if idx := strings.Index(strings.ToLower(firstCol), "saat"); idx != -1 {
+				currentRace.RaceName = strings.TrimSpace(firstCol[:idx])
+				timePart := strings.TrimSpace(firstCol[idx:])
+				timePart = strings.TrimPrefix(timePart, "Saat:")
+				timePart = strings.TrimPrefix(timePart, "saat:")
+				timePart = strings.TrimPrefix(timePart, "Saat :")
+				timePart = strings.TrimPrefix(timePart, "saat :")
+				timePart = strings.TrimPrefix(timePart, "Saat")
+				timePart = strings.TrimPrefix(timePart, "saat")
+				timePart = strings.TrimSpace(timePart)
+				timePart = strings.TrimPrefix(timePart, ":")
+				currentRace.Time = strings.TrimSpace(timePart)
 			} else {
-				currentRace.RaceName = firstCol
+				parts := strings.SplitN(firstCol, ":", 2)
+				if len(parts) >= 2 {
+					currentRace.RaceName = strings.TrimSpace(parts[0])
+					currentRace.Time = strings.TrimSpace(parts[1])
+				} else {
+					currentRace.RaceName = firstCol
+				}
 			}
 
 			if len(record) > 1 {

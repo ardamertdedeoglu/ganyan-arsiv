@@ -13,7 +13,7 @@ import {
 } from "../wailsjs/go/main/App";
 
 function renderPerformance(last6) {
-  if (!last6) return <span className="text-gray-300 text-xs">—</span>;
+  if (!last6) return <span className="text-gray-300 text-s">—</span>;
 
   // Pattern: (K|S|Ç|k|s|ç)([0-9]+)
   const regex = /([KSÇksç])([0-9]+)/g;
@@ -24,60 +24,64 @@ function renderPerformance(last6) {
   while ((match = regex.exec(last6)) !== null) {
     if (match.index > lastIndex) {
       matches.push({
-        type: 'text',
-        value: last6.substring(lastIndex, match.index)
+        type: "text",
+        value: last6.substring(lastIndex, match.index),
       });
     }
     matches.push({
-      type: 'badge',
+      type: "badge",
       char: match[1].toUpperCase(),
-      num: match[2]
+      num: match[2],
     });
     lastIndex = regex.lastIndex;
   }
 
   if (lastIndex < last6.length) {
     matches.push({
-      type: 'text',
-      value: last6.substring(lastIndex)
+      type: "text",
+      value: last6.substring(lastIndex),
     });
   }
 
-  if (matches.filter(m => m.type === 'badge').length === 0) {
+  if (matches.filter((m) => m.type === "badge").length === 0) {
     return (
-      <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded font-mono text-xs font-bold tracking-wider">
+      <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded font-mono text-s font-bold tracking-wider">
         {last6}
       </span>
     );
   }
 
   const colors = {
-    'K': '#996633', // Kum
-    'S': '#d39b1e', // Sentetik
-    'Ç': '#009900'  // Çim
+    K: "#996633", // Kum
+    S: "#d39b1e", // Sentetik
+    Ç: "#009900", // Çim
   };
 
   const descriptions = {
-    'K': 'Kum',
-    'S': 'Sentetik',
-    'Ç': 'Çim'
+    K: "Kum",
+    S: "Sentetik",
+    Ç: "Çim",
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-1 font-mono text-xs font-bold">
+    <div className="flex flex-wrap items-center gap-1 font-mono text-s font-bold">
       {matches.map((item, idx) => {
-        if (item.type === 'text') {
-          return <span key={idx} className="text-gray-500 px-0.5">{item.value}</span>;
+        if (item.type === "text") {
+          return (
+            <span key={idx} className="text-gray-500 px-0.5">
+              {item.value}
+            </span>
+          );
         }
 
-        const bgColor = colors[item.char] || '#6b7280';
+        const bgColor = colors[item.char] || "#6b7280";
         const label = descriptions[item.char] || item.char;
 
         return (
           <span
             key={idx}
             style={{ backgroundColor: bgColor }}
-            className="text-white w-5 h-5 rounded flex items-center justify-center text-[10px] shadow-sm font-bold border border-white/10"
+            className="text-white w-5 h-5 rounded flex items-center justify-center text-[15px] shadow-sm font-bold border border-white/10"
             title={`${label} ${item.num}`}
           >
             {item.num}
@@ -209,7 +213,7 @@ function App() {
     const promises = programs.map((p) =>
       GetProgramSilks(p.city, dateStr)
         .then((result) => ({ city: p.city, data: result }))
-        .catch(() => ({ city: p.city, data: {} }))
+        .catch(() => ({ city: p.city, data: {} })),
     );
     Promise.all(promises).then((results) => {
       const newSilks = {};
@@ -440,8 +444,22 @@ function App() {
                           }`}
                         >
                           <div className="flex flex-col items-center gap-1">
-                            <span>
-                              {race.race_name.split(":")[0] || `${i + 1}. Koşu`}
+                            <span className="flex items-center gap-1.5">
+                              <span>
+                                {race.race_name.split("Saat")[0].trim() ||
+                                  `${i + 1}. Koşu`}
+                              </span>
+                              {race.time && (
+                                <span
+                                  className={`text-xs font-semibold px-1.5 py-0.5 rounded ${
+                                    selectedRaceIndex === i
+                                      ? "bg-emerald-500/20 text-emerald-300"
+                                      : "bg-slate-100 text-slate-500"
+                                  }`}
+                                >
+                                  {race.time}
+                                </span>
+                              )}
                             </span>
                           </div>
                         </button>
@@ -454,8 +472,15 @@ function App() {
                     <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden animate-in fade-in duration-300">
                       <div className="bg-slate-800 text-white p-5 flex flex-col md:flex-row md:items-center justify-between gap-3 border-b-4 border-emerald-500">
                         <div>
-                          <h3 className="font-bold text-xl">
-                            {selectedRace.race_name}
+                          <h3 className="font-bold text-xl flex items-center gap-3">
+                            <span>
+                              {selectedRace.race_name.split("Saat")[0].trim()}
+                            </span>
+                            {selectedRace.time && (
+                              <span className="text-emerald-400 text-m font-semibold bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-500/20">
+                                {selectedRace.time}
+                              </span>
+                            )}
                           </h3>
                           <div className="text-sm text-slate-300 flex flex-wrap items-center gap-2 mt-1.5">
                             {selectedRace.condition && (
@@ -466,7 +491,7 @@ function App() {
                             {selectedRace.age_group && (
                               <>
                                 <span>•</span>
-                                <span className="bg-slate-700 text-amber-300 px-2 py-0.5 rounded-md text-xs font-bold border border-slate-600">
+                                <span className="bg-slate-700 text-amber-300 px-2 py-0.5 rounded-md text-s font-bold border border-slate-600">
                                   {selectedRace.age_group}
                                 </span>
                               </>
@@ -496,7 +521,7 @@ function App() {
                           <tbody className="divide-y divide-gray-50">
                             {selectedRace.horses &&
                               selectedRace.horses.map((horse, j) => (
-                                 <tr
+                                <tr
                                   key={j}
                                   className="hover:bg-emerald-50/50 transition-colors"
                                 >
@@ -506,14 +531,20 @@ function App() {
                                   {/* Forma / Silk */}
                                   <td className="p-2 text-center">
                                     {(() => {
-                                      const silkURL = getSilkURL(p.city, selectedRaceIndex, horse.horse_no);
+                                      const silkURL = getSilkURL(
+                                        p.city,
+                                        selectedRaceIndex,
+                                        horse.horse_no,
+                                      );
                                       if (silkURL) {
                                         return (
                                           <img
                                             src={silkURL}
                                             alt={`Forma ${horse.horse_no}`}
-                                            className="h-8 w-auto object-contain rounded mx-auto"
-                                            onError={(e) => { e.target.style.display = 'none'; }}
+                                            className="h-12 w-auto object-contain rounded mx-auto"
+                                            onError={(e) => {
+                                              e.target.style.display = "none";
+                                            }}
                                           />
                                         );
                                       } else if (loadingSilks) {
@@ -521,7 +552,11 @@ function App() {
                                           <div className="w-6 h-6 mx-auto rounded-full border-2 border-gray-200 border-t-emerald-400 animate-spin" />
                                         );
                                       } else {
-                                        return <span className="text-gray-300 text-xs">—</span>;
+                                        return (
+                                          <span className="text-gray-300 text-xs">
+                                            —
+                                          </span>
+                                        );
                                       }
                                     })()}
                                   </td>
@@ -636,8 +671,18 @@ function App() {
               onClick={cancelEditing}
               className="text-gray-400 hover:text-gray-600 p-2 rounded-xl hover:bg-gray-100 transition-colors"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
               </svg>
             </button>
           </div>
@@ -646,7 +691,9 @@ function App() {
             {/* Temel Bilgiler */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-gray-50 p-4 rounded-2xl border border-gray-100">
               <div className="space-y-1">
-                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Tarih</label>
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                  Tarih
+                </label>
                 <input
                   type="date"
                   value={editDate}
@@ -655,7 +702,9 @@ function App() {
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Şehir</label>
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                  Şehir
+                </label>
                 <select
                   value={editCity}
                   onChange={(e) => setEditCity(e.target.value)}
@@ -679,7 +728,9 @@ function App() {
                     onClick={() => setEditIsCompleted(!editIsCompleted)}
                     className={`relative w-11 h-6 rounded-full transition-colors ${editIsCompleted ? "bg-emerald-500" : "bg-gray-300"}`}
                   >
-                    <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform ${editIsCompleted ? "translate-x-5" : "translate-x-0"}`} />
+                    <div
+                      className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform ${editIsCompleted ? "translate-x-5" : "translate-x-0"}`}
+                    />
                   </div>
                   <span className="text-sm font-semibold text-gray-700">
                     {editIsCompleted ? "✓ Sonuçlandı" : "⏱ Sonuç Bekleniyor"}
@@ -690,7 +741,9 @@ function App() {
 
             {/* Ayaklar */}
             <div>
-              <h3 className="font-bold text-base text-gray-800 mb-3">Ayak Tahminleri</h3>
+              <h3 className="font-bold text-base text-gray-800 mb-3">
+                Ayak Tahminleri
+              </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {editLegs.map((leg, i) => (
                   <div
@@ -707,7 +760,9 @@ function App() {
                           type="number"
                           min="0"
                           value={leg.winner_horse || ""}
-                          onChange={(e) => handleEditWinnerChange(i, e.target.value)}
+                          onChange={(e) =>
+                            handleEditWinnerChange(i, e.target.value)
+                          }
                           placeholder="0"
                           className="w-14 text-xs bg-white border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-400 text-center font-bold"
                         />
@@ -755,12 +810,25 @@ function App() {
         <div className="fixed top-0 left-0 right-0 z-50 animate-in fade-in slide-in-from-top-4 duration-500">
           <div className="bg-gradient-to-r from-emerald-600 to-teal-600 text-white px-6 py-3 flex items-center justify-center gap-4 shadow-lg">
             <div className="flex items-center gap-2">
-              <svg className="w-5 h-5 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              <svg
+                className="w-5 h-5 animate-bounce"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                />
               </svg>
               <span className="font-semibold text-sm">
-                Yeni sürüm mevcut: <span className="font-bold">{updateInfo.latestVersion}</span>
-                <span className="text-emerald-200 ml-1">(mevcut: {updateInfo.currentVersion})</span>
+                Yeni sürüm mevcut:{" "}
+                <span className="font-bold">{updateInfo.latestVersion}</span>
+                <span className="text-emerald-200 ml-1">
+                  (mevcut: {updateInfo.currentVersion})
+                </span>
               </span>
             </div>
             <button
@@ -770,9 +838,24 @@ function App() {
             >
               {updating ? (
                 <>
-                  <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  <svg
+                    className="animate-spin w-4 h-4"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    ></circle>
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
                   </svg>
                   Güncelleniyor...
                 </>
@@ -785,8 +868,18 @@ function App() {
               className="text-white/70 hover:text-white transition-colors p-1"
               title="Kapat"
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
               </svg>
             </button>
           </div>
@@ -794,22 +887,41 @@ function App() {
       )}
 
       {/* Update Success Banner */}
-      {updateInfo && !updateInfo.updateAvailable && updateInfo.message && updateInfo.message.includes("başarılı") && (
-        <div className="fixed top-0 left-0 right-0 z-50 animate-in fade-in slide-in-from-top-4 duration-500">
-          <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3 flex items-center justify-center gap-4 shadow-lg">
-            <div className="flex items-center gap-2">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span className="font-semibold text-sm">{updateInfo.message}</span>
+      {updateInfo &&
+        !updateInfo.updateAvailable &&
+        updateInfo.message &&
+        updateInfo.message.includes("başarılı") && (
+          <div className="fixed top-0 left-0 right-0 z-50 animate-in fade-in slide-in-from-top-4 duration-500">
+            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3 flex items-center justify-center gap-4 shadow-lg">
+              <div className="flex items-center gap-2">
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+                <span className="font-semibold text-sm">
+                  {updateInfo.message}
+                </span>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
       <div
         className={`container mx-auto px-4 transition-all duration-500 ${
-          updateInfo && (updateInfo.updateAvailable && !updateDismissed || updateInfo.message?.includes("başarılı")) ? "pt-12" : ""
+          updateInfo &&
+          ((updateInfo.updateAvailable && !updateDismissed) ||
+            updateInfo.message?.includes("başarılı"))
+            ? "pt-12"
+            : ""
         } ${view === "program" ? "max-w-[95%]" : "max-w-5xl"}`}
       >
         {/* Header Navbar */}
@@ -836,7 +948,9 @@ function App() {
                 TJK Ganyan Arşiv
               </h1>
               {appVersion && (
-                <span className="text-xs text-gray-400 font-medium">{appVersion}</span>
+                <span className="text-xs text-gray-400 font-medium">
+                  {appVersion}
+                </span>
               )}
             </div>
           </div>
@@ -995,8 +1109,18 @@ function App() {
                         className="text-gray-400 hover:text-emerald-600 bg-gray-50 hover:bg-emerald-50 p-2 rounded-full transition-colors"
                         title="Düzenle"
                       >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        <svg
+                          className="w-5 h-5"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                          />
                         </svg>
                       </button>
                       <button
@@ -1069,7 +1193,9 @@ function App() {
                             {renderHorseBadges(leg.predictions)}
                             {leg.winner_horse > 0 && (
                               <div className="mt-2 flex items-center gap-1">
-                                <span className="text-xs text-gray-400">Kazanan:</span>
+                                <span className="text-xs text-gray-400">
+                                  Kazanan:
+                                </span>
                                 <span className="w-6 h-6 flex items-center justify-center bg-indigo-100 text-indigo-700 font-bold rounded-full text-xs border border-indigo-200">
                                   {leg.winner_horse}
                                 </span>
