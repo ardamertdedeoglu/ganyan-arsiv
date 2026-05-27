@@ -243,28 +243,87 @@ func FetchAllPrograms(date string) []RaceProgram {
 	return programs
 }
 
+func cleanString(s string) string {
+	s = strings.ToLower(s)
+	replacer := strings.NewReplacer(
+		"ı", "i",
+		"i̇", "i",
+		"ğ", "g",
+		"ü", "u",
+		"ş", "s",
+		"ö", "o",
+		"ç", "c",
+	)
+	return replacer.Replace(s)
+}
+
 // FetchSilks scrapes jockey silk image URLs for all races of a given city on a given date.
 // Returns a map: raceIndex (0-based) -> horseNo -> silkURL
 func FetchSilks(city, date string) (map[int]map[string]string, error) {
-	sehirID, ok := cityToSehirID[city]
-	if !ok {
-		return nil, fmt.Errorf("unknown city: %s", city)
-	}
-
 	parsedDate, err := time.Parse("2006-01-02", date)
 	if err != nil {
 		return nil, fmt.Errorf("invalid date: %s", date)
 	}
 	ddmmyyyy := parsedDate.Format("02/01/2006")
 
-	targetURL := fmt.Sprintf(
-		"https://www.tjk.org/TR/YarisSever/Info/Sehir/GunlukYarisProgrami?SehirId=%d&QueryParameter_Tarih=%s&SehirAdi=%s&Era=today",
-		sehirID,
-		url.QueryEscape(ddmmyyyy),
-		url.QueryEscape(city),
-	)
-
 	client := &http.Client{Timeout: 15 * time.Second}
+
+	// 1. Dynamically find targetURL from main program page
+	mainURL := fmt.Sprintf("https://www.tjk.org/TR/YarisSever/Info/Page/GunlukYarisProgrami?QueryParameter_Tarih=%s", url.QueryEscape(ddmmyyyy))
+	reqMain, err := http.NewRequest("GET", mainURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	reqMain.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	reqMain.Header.Set("Accept-Language", "tr-TR,tr;q=0.9")
+
+	respMain, err := client.Do(reqMain)
+	if err != nil {
+		return nil, err
+	}
+	defer respMain.Body.Close()
+
+	if respMain.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d from TJK main page", respMain.StatusCode)
+	}
+
+	docMain, err := goquery.NewDocumentFromReader(respMain.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	targetURL := ""
+	found := false
+	docMain.Find("ul.gunluk-tabs li a").Each(func(_ int, s *goquery.Selection) {
+		if found {
+			return
+		}
+		tabText := strings.TrimSpace(s.Text())
+		href, _ := s.Attr("href")
+
+		if strings.Contains(cleanString(tabText), cleanString(city)) {
+			found = true
+			if !strings.HasPrefix(href, "http") {
+				href = "https://www.tjk.org" + href
+			}
+			targetURL = href
+		}
+	})
+
+	// 2. Fallback to hardcoded map if dynamic tab is not found
+	if !found {
+		sehirID, ok := cityToSehirID[city]
+		if !ok {
+			return nil, fmt.Errorf("city not found in tabs and unknown in map: %s", city)
+		}
+		targetURL = fmt.Sprintf(
+			"https://www.tjk.org/TR/YarisSever/Info/Sehir/GunlukYarisProgrami?SehirId=%d&QueryParameter_Tarih=%s&SehirAdi=%s&Era=today",
+			sehirID,
+			url.QueryEscape(ddmmyyyy),
+			url.QueryEscape(city),
+		)
+	}
+
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
 		return nil, err
@@ -279,7 +338,7 @@ func FetchSilks(city, date string) (map[int]map[string]string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP %d from TJK", resp.StatusCode)
+		return nil, fmt.Errorf("HTTP %d from TJK target page", resp.StatusCode)
 	}
 
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
