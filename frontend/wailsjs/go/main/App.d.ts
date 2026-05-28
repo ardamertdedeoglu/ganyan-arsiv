@@ -10,6 +10,8 @@ export function GetAppVersion():Promise<string>;
 
 export function GetDailyPrograms(arg1:string):Promise<Array<main.RaceProgram>>;
 
+export function GetGanyanTypes(arg1:string,arg2:string):Promise<Array<main.GanyanInfo>>;
+
 export function GetPredictions():Promise<Array<main.Prediction>>;
 
 export function GetProgramSilks(arg1:string,arg2:string):Promise<Record<number, Record<string, string>>>;

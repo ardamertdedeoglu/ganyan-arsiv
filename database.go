@@ -20,6 +20,9 @@ type Prediction struct {
 	IsCompleted bool      `json:"is_completed"`
 	CreatedAt   time.Time `json:"created_at"`
 	Legs        []Leg     `json:"legs"`
+	GanyanName  string    `json:"ganyan_name"`
+	GanyanLegs  string    `json:"ganyan_legs"`
+	GanyanCost  float64   `json:"ganyan_cost"`
 }
 
 type Leg struct {
@@ -52,11 +55,23 @@ func InitDB() error {
 		race_time TEXT,
 		is_completed BOOLEAN,
 		created_at DATETIME,
-		legs TEXT
+		legs TEXT,
+		ganyan_name TEXT DEFAULT '',
+		ganyan_legs TEXT DEFAULT '',
+		ganyan_cost REAL DEFAULT 0.0
 	);`
 
 	_, err = db.Exec(createTableSQL)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Dynamic column migrations for existing databases
+	_, _ = db.Exec("ALTER TABLE predictions ADD COLUMN ganyan_name TEXT DEFAULT ''")
+	_, _ = db.Exec("ALTER TABLE predictions ADD COLUMN ganyan_legs TEXT DEFAULT ''")
+	_, _ = db.Exec("ALTER TABLE predictions ADD COLUMN ganyan_cost REAL DEFAULT 0.0")
+
+	return nil
 }
 
 func savePredictionToDB(p Prediction) error {
@@ -65,8 +80,8 @@ func savePredictionToDB(p Prediction) error {
 		return err
 	}
 
-	query := `INSERT INTO predictions (date, city, race_time, is_completed, created_at, legs) VALUES (?, ?, ?, ?, ?, ?)`
-	result, err := db.Exec(query, p.Date, p.City, p.RaceTime, p.IsCompleted, time.Now(), string(legsJSON))
+	query := `INSERT INTO predictions (date, city, race_time, is_completed, created_at, legs, ganyan_name, ganyan_legs, ganyan_cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	result, err := db.Exec(query, p.Date, p.City, p.RaceTime, p.IsCompleted, time.Now(), string(legsJSON), p.GanyanName, p.GanyanLegs, p.GanyanCost)
 	if err != nil {
 		return err
 	}
@@ -79,7 +94,7 @@ func savePredictionToDB(p Prediction) error {
 }
 
 func getPredictionsFromDB() ([]Prediction, error) {
-	rows, err := db.Query(`SELECT id, date, city, race_time, is_completed, created_at, legs FROM predictions ORDER BY created_at DESC`)
+	rows, err := db.Query(`SELECT id, date, city, race_time, is_completed, created_at, legs, COALESCE(ganyan_name, ''), COALESCE(ganyan_legs, ''), COALESCE(ganyan_cost, 0.0) FROM predictions ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +104,7 @@ func getPredictionsFromDB() ([]Prediction, error) {
 	for rows.Next() {
 		var p Prediction
 		var legsJSON string
-		err := rows.Scan(&p.ID, &p.Date, &p.City, &p.RaceTime, &p.IsCompleted, &p.CreatedAt, &legsJSON)
+		err := rows.Scan(&p.ID, &p.Date, &p.City, &p.RaceTime, &p.IsCompleted, &p.CreatedAt, &legsJSON, &p.GanyanName, &p.GanyanLegs, &p.GanyanCost)
 		if err != nil {
 			return nil, err
 		}
@@ -113,7 +128,7 @@ func updatePredictionInDB(p Prediction) error {
 		return err
 	}
 
-	query := `UPDATE predictions SET date = ?, city = ?, race_time = ?, is_completed = ?, legs = ? WHERE id = ?`
-	_, err = db.Exec(query, p.Date, p.City, p.RaceTime, p.IsCompleted, string(legsJSON), p.ID)
+	query := `UPDATE predictions SET date = ?, city = ?, race_time = ?, is_completed = ?, legs = ?, ganyan_name = ?, ganyan_legs = ?, ganyan_cost = ? WHERE id = ?`
+	_, err = db.Exec(query, p.Date, p.City, p.RaceTime, p.IsCompleted, string(legsJSON), p.GanyanName, p.GanyanLegs, p.GanyanCost, p.ID)
 	return err
 }

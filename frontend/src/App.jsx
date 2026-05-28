@@ -10,6 +10,7 @@ import {
   CheckForUpdate,
   PerformUpdate,
   GetAppVersion,
+  GetGanyanTypes,
 } from "../wailsjs/go/main/App";
 
 function renderPerformance(last6) {
@@ -92,6 +93,28 @@ function renderPerformance(last6) {
   );
 }
 
+function calculatePredictionCost(legsState) {
+  let product = 1;
+  let hasHorses = false;
+
+  for (const leg of legsState) {
+    if (!leg || !leg.predictions) return 0;
+    const horseCount = leg.predictions
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s !== "" && !isNaN(parseInt(s, 10))).length;
+
+    if (horseCount > 0) {
+      product *= horseCount;
+      hasHorses = true;
+    } else {
+      return 0;
+    }
+  }
+
+  return hasHorses ? product * 1.25 : 0;
+}
+
 function App() {
   const [view, setView] = useState("list"); // 'list' | 'form' | 'program'
   const [predictions, setPredictions] = useState([]);
@@ -113,6 +136,9 @@ function App() {
     { leg_number: 5, predictions: "" },
     { leg_number: 6, predictions: "" },
   ]);
+  const [ganyanTypes, setGanyanTypes] = useState([]);
+  const [selectedGanyanType, setSelectedGanyanType] = useState(null);
+  const [loadingGanyanTypes, setLoadingGanyanTypes] = useState(false);
 
   // Edit state (mevcut tahmin düzenleme)
   const [editingPrediction, setEditingPrediction] = useState(null);
@@ -156,6 +182,29 @@ function App() {
       fetchPrograms(programDate);
     }
   }, [view]);
+
+  useEffect(() => {
+    if (view === "form") {
+      setLoadingGanyanTypes(true);
+      GetGanyanTypes(city, date)
+        .then((types) => {
+          setGanyanTypes(types || []);
+          if (types && types.length > 0) {
+            setSelectedGanyanType(types[0]);
+          } else {
+            setSelectedGanyanType(null);
+          }
+        })
+        .catch((err) => {
+          console.error("Ganyan tipleri alınamadı:", err);
+          setGanyanTypes([]);
+          setSelectedGanyanType(null);
+        })
+        .finally(() => {
+          setLoadingGanyanTypes(false);
+        });
+    }
+  }, [city, date, view]);
 
   function handleUpdate() {
     setUpdating(true);
@@ -246,17 +295,25 @@ function App() {
   function handleSave(e) {
     e.preventDefault();
 
-    const parsedLegs = legs.map((leg) => {
+    const parsedLegs = legs.map((leg, i) => {
       const arr = leg.predictions
         .split(",")
         .map((s) => parseInt(s.trim(), 10))
         .filter((n) => !isNaN(n));
+
+      const actualRaceNo =
+        selectedGanyanType && selectedGanyanType.races
+          ? selectedGanyanType.races[i]
+          : leg.leg_number;
+
       return {
-        leg_number: leg.leg_number,
+        leg_number: actualRaceNo,
         predictions: arr,
         winner_horse: 0,
       };
     });
+
+    const cost = calculatePredictionCost(legs);
 
     const p = {
       date: date,
@@ -264,6 +321,12 @@ function App() {
       race_time: "",
       is_completed: false,
       legs: parsedLegs,
+      ganyan_name: selectedGanyanType ? selectedGanyanType.name : "6'LI GANYAN",
+      ganyan_legs:
+        selectedGanyanType && selectedGanyanType.races
+          ? selectedGanyanType.races.join("-")
+          : "1-2-3-4-5-6",
+      ganyan_cost: cost,
     };
 
     SavePrediction(p)
@@ -334,6 +397,8 @@ function App() {
       };
     });
 
+    const cost = calculatePredictionCost(editLegs);
+
     const updated = {
       id: editingPrediction.id,
       date: editDate,
@@ -341,6 +406,9 @@ function App() {
       race_time: editingPrediction.race_time || "",
       is_completed: editIsCompleted,
       legs: parsedLegs,
+      ganyan_name: editingPrediction.ganyan_name || "6'LI GANYAN",
+      ganyan_legs: editingPrediction.ganyan_legs || "1-2-3-4-5-6",
+      ganyan_cost: cost,
     };
 
     UpdatePrediction(updated)
@@ -752,7 +820,9 @@ function App() {
                   >
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-bold text-emerald-600 uppercase tracking-wider">
-                        {leg.leg_number}. Ayak
+                        {editingPrediction?.ganyan_legs
+                          ? `${leg.leg_number}. Koşu`
+                          : `${leg.leg_number}. Ayak`}
                       </label>
                       <div className="flex items-center gap-1">
                         <span className="text-xs text-gray-400">Kazanan:</span>
@@ -781,19 +851,53 @@ function App() {
             </div>
           </div>
 
-          <div className="p-6 border-t border-gray-100 flex gap-3 justify-end">
-            <button
-              onClick={cancelEditing}
-              className="px-5 py-2.5 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition-colors text-sm"
-            >
-              İptal
-            </button>
-            <button
-              onClick={handleEditSave}
-              className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-colors text-sm shadow-md"
-            >
-              Kaydet
-            </button>
+          <div className="p-6 border-t border-gray-100 flex flex-col sm:flex-row gap-4 items-center justify-between">
+            {(() => {
+              const currentCost = calculatePredictionCost(editLegs);
+              return (
+                <div className="flex items-center gap-2.5 bg-emerald-50 text-emerald-800 px-4 py-2 rounded-xl border border-emerald-100 select-none">
+                  <svg
+                    className="w-5 h-5 text-emerald-600"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
+                  </svg>
+                  <div className="text-left">
+                    <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wide block leading-none">
+                      Güncel Tutar
+                    </span>
+                    <span className="font-extrabold text-sm leading-tight">
+                      {currentCost.toLocaleString("tr-TR", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}{" "}
+                      TL
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
+            <div className="flex gap-3 justify-end w-full sm:w-auto">
+              <button
+                onClick={cancelEditing}
+                className="px-5 py-2.5 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition-colors text-sm"
+              >
+                İptal
+              </button>
+              <button
+                onClick={handleEditSave}
+                className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-colors text-sm shadow-md"
+              >
+                Kaydet
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -945,7 +1049,7 @@ function App() {
             </div>
             <div>
               <h1 className="text-2xl font-extrabold text-gray-800 tracking-tight">
-                TJK Ganyan Arşiv
+                Hedef Bülten
               </h1>
               {appVersion && (
                 <span className="text-xs text-gray-400 font-medium">
@@ -1026,39 +1130,162 @@ function App() {
                 </div>
               </div>
 
+              {/* Pick 6 Program Selector */}
+              <div className="mb-8 p-6 bg-gradient-to-br from-slate-50 to-slate-100 rounded-2xl border border-slate-200/60 shadow-sm animate-in fade-in duration-300">
+                <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-3.5 flex items-center gap-2">
+                  <svg
+                    className="w-4 h-4 text-emerald-600 animate-pulse"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+                    />
+                  </svg>
+                  Hangi Altılı Ganyan?
+                </h3>
+                {loadingGanyanTypes ? (
+                  <div className="flex items-center gap-3 py-2 text-slate-500 font-medium">
+                    <div className="w-5 h-5 rounded-full border-2 border-slate-300 border-t-emerald-500 animate-spin" />
+                    <span>Ganyan Programı Yükleniyor...</span>
+                  </div>
+                ) : ganyanTypes.length === 0 ? (
+                  <div className="text-slate-500 text-sm bg-white p-4 rounded-xl border border-slate-100 font-medium">
+                    Seçilen tarih ve şehir için 6'lı Ganyan bülteni bulunamadı.
+                    Lütfen geçerli bir tarih ve şehir seçin.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {ganyanTypes.map((type, idx) => {
+                      const isSelected = selectedGanyanType?.name === type.name;
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => setSelectedGanyanType(type)}
+                          className={`cursor-pointer p-4 rounded-xl border-2 transition-all flex items-center justify-between group select-none shadow-sm ${
+                            isSelected
+                              ? "bg-emerald-50/70 border-emerald-500 ring-2 ring-emerald-500/10 shadow-emerald-500/5"
+                              : "bg-white border-slate-200 hover:border-emerald-300 hover:bg-slate-50/50"
+                          }`}
+                        >
+                          <div>
+                            <div
+                              className={`font-black text-sm transition-colors ${isSelected ? "text-emerald-700" : "text-slate-700 group-hover:text-emerald-600"}`}
+                            >
+                              {type.name}
+                            </div>
+                            <div className="text-xs text-slate-400 font-bold mt-1 tracking-wider">
+                              Koşular: {type.races.join(" - ")}
+                            </div>
+                          </div>
+                          <div
+                            className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
+                              isSelected
+                                ? "border-emerald-600 bg-emerald-600 text-white"
+                                : "border-slate-300"
+                            }`}
+                          >
+                            {isSelected && (
+                              <svg
+                                className="w-3.5 h-3.5 stroke-[3]"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M4.5 12.75l6 6 9-13.5"
+                                />
+                              </svg>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
               <div className="space-y-4">
                 <h3 className="font-bold text-xl text-gray-800 mb-4">
                   Ayak Tahminleri
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {legs.map((leg, i) => (
-                    <div
-                      key={i}
-                      className="flex flex-col bg-white border border-gray-200 p-4 rounded-2xl shadow-sm focus-within:ring-2 focus-within:ring-emerald-100 transition-all"
-                    >
-                      <label className="text-sm font-bold text-emerald-600 mb-2">
-                        {i + 1}. Ayak (Virgülle Ayırın)
-                      </label>
-                      <input
-                        type="text"
-                        value={leg.predictions}
-                        onChange={(e) => handleLegChange(i, e.target.value)}
-                        placeholder="Örn: 5, 3, 1, 12"
-                        className="w-full text-lg outline-none bg-transparent"
-                      />
-                    </div>
-                  ))}
+                  {legs.map((leg, i) => {
+                    const actualRaceNo = selectedGanyanType?.races
+                      ? selectedGanyanType.races[i]
+                      : null;
+                    return (
+                      <div
+                        key={i}
+                        className="flex flex-col bg-white border border-gray-200 p-4 rounded-2xl shadow-sm focus-within:ring-2 focus-within:ring-emerald-100 transition-all"
+                      >
+                        <label className="text-sm font-bold text-emerald-600 mb-2 flex items-center justify-between">
+                          <span>{i + 1}. Ayak (Virgülle Ayırın)</span>
+                          {actualRaceNo && (
+                            <span className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded text-xs font-black border border-emerald-100 shadow-sm">
+                              {actualRaceNo}. Koşu
+                            </span>
+                          )}
+                        </label>
+                        <input
+                          type="text"
+                          value={leg.predictions}
+                          onChange={(e) => handleLegChange(i, e.target.value)}
+                          placeholder="Örn: 5, 3, 1, 12"
+                          className="w-full text-lg outline-none bg-transparent"
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
-              <div className="mt-10 flex border-t border-gray-100 pt-6">
-                <button
-                  type="submit"
-                  className="w-full md:w-auto px-8 py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md hover:shadow-lg transition-all transform hover:-translate-y-0.5"
-                >
-                  Arşive Ekle
-                </button>
-              </div>
+              {(() => {
+                const currentCost = calculatePredictionCost(legs);
+                return (
+                  <div className="mt-10 flex flex-col md:flex-row items-center justify-between border-t border-gray-100 pt-6 gap-4">
+                    <div className="flex items-center gap-3 bg-emerald-50 text-emerald-800 px-6 py-3.5 rounded-2xl border border-emerald-100 shadow-sm select-none">
+                      <svg
+                        className="w-6 h-6 text-emerald-600 animate-bounce"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                        />
+                      </svg>
+                      <div className="text-left">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 leading-none">
+                          Tahmini Kupon Tutarı
+                        </div>
+                        <div className="text-2xl font-black leading-tight mt-0.5">
+                          {currentCost.toLocaleString("tr-TR", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}{" "}
+                          TL
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="submit"
+                      className="w-full md:w-auto px-8 py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md hover:shadow-lg transition-all transform hover:-translate-y-0.5"
+                    >
+                      Arşive Ekle
+                    </button>
+                  </div>
+                );
+              })()}
             </form>
           </div>
         )}
@@ -1166,6 +1393,45 @@ function App() {
                             </svg>
                             {p.date.split("T")[0]}
                           </span>
+                          {p.ganyan_name && (
+                            <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-md text-sm font-extrabold border border-emerald-100 shadow-sm flex items-center gap-1">
+                              <svg
+                                className="w-3.5 h-3.5 stroke-[2.5]"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M13 10V3L4 14h7v7l9-11h-7z"
+                                />
+                              </svg>
+                              {p.ganyan_name} ({p.ganyan_legs})
+                            </span>
+                          )}
+                          {p.ganyan_cost > 0 && (
+                            <span className="bg-blue-50 text-blue-700 px-3 py-1 rounded-md text-sm font-black border border-blue-100 shadow-sm flex items-center gap-1">
+                              <svg
+                                className="w-4 h-4 text-blue-600"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                                />
+                              </svg>
+                              {p.ganyan_cost.toLocaleString("tr-TR", {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}{" "}
+                              TL
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div className="md:ml-auto">
@@ -1187,8 +1453,10 @@ function App() {
                             key={i}
                             className="bg-gray-50 border border-gray-100 rounded-2xl p-3 transition-colors hover:bg-emerald-50"
                           >
-                            <div className="text-xs font-black text-gray-400 uppercase tracking-widest mb-1">
-                              {leg.leg_number}. Ayak
+                            <div className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">
+                              {p.ganyan_legs
+                                ? `${leg.leg_number}. Koşu`
+                                : `${leg.leg_number}. Ayak`}
                             </div>
                             {renderHorseBadges(leg.predictions)}
                             {leg.winner_horse > 0 && (

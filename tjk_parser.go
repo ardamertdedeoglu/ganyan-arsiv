@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -271,9 +272,14 @@ func cleanString(s string) string {
 	return replacer.Replace(s)
 }
 
-// FetchSilks scrapes jockey silk image URLs for all races of a given city on a given date.
-// Returns a map: raceIndex (0-based) -> horseNo -> silkURL
-func FetchSilks(city, date string) (map[int]map[string]string, error) {
+// GanyanInfo holds Pick 6 information
+type GanyanInfo struct {
+	Name      string `json:"name"`       // e.g. "1. 6'LI GANYAN"
+	StartRace int    `json:"start_race"` // e.g. 5
+	Races     []int  `json:"races"`      // e.g. [5, 6, 7, 8, 9, 10]
+}
+
+func fetchCityHTML(city, date string) (*goquery.Document, error) {
 	parsedDate, err := time.Parse("2006-01-02", date)
 	if err != nil {
 		return nil, fmt.Errorf("invalid date: %s", date)
@@ -355,7 +361,13 @@ func FetchSilks(city, date string) (map[int]map[string]string, error) {
 		return nil, fmt.Errorf("HTTP %d from TJK target page", resp.StatusCode)
 	}
 
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	return goquery.NewDocumentFromReader(resp.Body)
+}
+
+// FetchSilks scrapes jockey silk image URLs for all races of a given city on a given date.
+// Returns a map: raceIndex (0-based) -> horseNo -> silkURL
+func FetchSilks(city, date string) (map[int]map[string]string, error) {
+	doc, err := fetchCityHTML(city, date)
 	if err != nil {
 		return nil, err
 	}
@@ -392,6 +404,153 @@ func FetchSilks(city, date string) (map[int]map[string]string, error) {
 	})
 
 	return result, nil
+}
+
+// FetchGanyanTypes fetches Pick 6 types dynamically by parsing target city program HTML
+func FetchGanyanTypes(city, date string) ([]GanyanInfo, error) {
+	doc, err := fetchCityHTML(city, date)
+	if err != nil {
+		return nil, err
+	}
+
+	var list []GanyanInfo
+	ganyanRegex := regexp.MustCompile(`(\d+)\.\s*6'LI\s*GANYAN\s*Bu\s*koşudan\s*başlar`)
+	spaceRegex := regexp.MustCompile(`\s+`)
+
+	raceIndex := 1
+	doc.Find("div.races-panes > div[id]").Each(func(_ int, raceDiv *goquery.Selection) {
+		id, exists := raceDiv.Attr("id")
+		if !exists || id == "" || id == "all" {
+			return
+		}
+
+		grid := raceDiv.Find(".bahisTipiGridContainer")
+		gridText := strings.TrimSpace(grid.Text())
+		gridTextCleaned := spaceRegex.ReplaceAllString(gridText, " ")
+
+		matches := ganyanRegex.FindStringSubmatch(gridTextCleaned)
+		if len(matches) > 1 {
+			ganyanNum := matches[1]
+
+			// We build races slice [raceIndex, ..., raceIndex+5]
+			races := make([]int, 6)
+			for i := 0; i < 6; i++ {
+				races[i] = raceIndex + i
+			}
+
+			list = append(list, GanyanInfo{
+				Name:      fmt.Sprintf("%s. 6'LI GANYAN", ganyanNum),
+				StartRace: raceIndex,
+				Races:     races,
+			})
+		}
+		raceIndex++
+	})
+
+	return list, nil
+}
+
+// FetchSingleProgram parses only the specific city program from CDN CSV
+func FetchSingleProgram(city, date string) *RaceProgram {
+	url := buildURL(city, date)
+	if url == "" {
+		return nil
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil
+	}
+
+	resp, err := client.Do(req)
+	if err != nil || resp.StatusCode != 200 {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return nil
+	}
+	defer resp.Body.Close()
+
+	return parseCSVProgram(city, date, resp.Body)
+}
+
+// GetGanyanTypes resolves available Pick 6 types for a city/date, with high-accuracy fallback
+func GetGanyanTypes(city, date string) ([]GanyanInfo, error) {
+	types, err := FetchGanyanTypes(city, date)
+	if err == nil && len(types) > 0 {
+		return types, nil
+	}
+
+	// Fallback guessing logic
+	prog := FetchSingleProgram(city, date)
+	if prog == nil || len(prog.Races) < 6 {
+		return []GanyanInfo{}, nil
+	}
+
+	numRaces := len(prog.Races)
+	var list []GanyanInfo
+
+	if numRaces == 6 {
+		list = append(list, GanyanInfo{
+			Name:      "1. 6'LI GANYAN",
+			StartRace: 1,
+			Races:     []int{1, 2, 3, 4, 5, 6},
+		})
+	} else if numRaces == 7 {
+		list = append(list, GanyanInfo{
+			Name:      "1. 6'LI GANYAN",
+			StartRace: 2,
+			Races:     []int{2, 3, 4, 5, 6, 7},
+		})
+	} else if numRaces == 8 {
+		list = append(list, GanyanInfo{
+			Name:      "1. 6'LI GANYAN",
+			StartRace: 3,
+			Races:     []int{3, 4, 5, 6, 7, 8},
+		})
+	} else if numRaces == 9 {
+		list = append(list, GanyanInfo{
+			Name:      "1. 6'LI GANYAN",
+			StartRace: 1,
+			Races:     []int{1, 2, 3, 4, 5, 6},
+		})
+		list = append(list, GanyanInfo{
+			Name:      "2. 6'LI GANYAN",
+			StartRace: 4,
+			Races:     []int{4, 5, 6, 7, 8, 9},
+		})
+	} else if numRaces == 10 {
+		list = append(list, GanyanInfo{
+			Name:      "1. 6'LI GANYAN",
+			StartRace: 1,
+			Races:     []int{1, 2, 3, 4, 5, 6},
+		})
+		list = append(list, GanyanInfo{
+			Name:      "2. 6'LI GANYAN",
+			StartRace: 5,
+			Races:     []int{5, 6, 7, 8, 9, 10},
+		})
+	} else if numRaces >= 11 {
+		list = append(list, GanyanInfo{
+			Name:      "1. 6'LI GANYAN",
+			StartRace: 1,
+			Races:     []int{1, 2, 3, 4, 5, 6},
+		})
+
+		start2 := numRaces - 5
+		races2 := make([]int, 6)
+		for i := 0; i < 6; i++ {
+			races2[i] = start2 + i
+		}
+		list = append(list, GanyanInfo{
+			Name:      "2. 6'LI GANYAN",
+			StartRace: start2,
+			Races:     races2,
+		})
+	}
+
+	return list, nil
 }
 
 // MergeSilksIntoProgram merges silk URLs fetched from the website into a parsed program

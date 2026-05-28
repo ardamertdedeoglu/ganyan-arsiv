@@ -58,3 +58,8 @@ func (a *App) GetProgramSilks(city, date string) (map[int]map[string]string, err
 	return FetchSilks(city, date)
 }
 
+// GetGanyanTypes fetches Pick 6 types for a specific city and date
+func (a *App) GetGanyanTypes(city, date string) ([]GanyanInfo, error) {
+	return GetGanyanTypes(city, date)
+}
+

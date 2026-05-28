@@ -18,6 +18,10 @@ export function GetDailyPrograms(arg1) {
   return window['go']['main']['App']['GetDailyPrograms'](arg1);
 }
 
+export function GetGanyanTypes(arg1, arg2) {
+  return window['go']['main']['App']['GetGanyanTypes'](arg1, arg2);
+}
+
 export function GetPredictions() {
   return window['go']['main']['App']['GetPredictions']();
 }

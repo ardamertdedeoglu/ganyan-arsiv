@@ -1,5 +1,21 @@
 export namespace main {
 	
+	export class GanyanInfo {
+	    name: string;
+	    start_race: number;
+	    races: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new GanyanInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.start_race = source["start_race"];
+	        this.races = source["races"];
+	    }
+	}
 	export class Horse {
 	    horse_no: string;
 	    name: string;
@@ -69,6 +85,9 @@ export namespace main {
 	    // Go type: time
 	    created_at: any;
 	    legs: Leg[];
+	    ganyan_name: string;
+	    ganyan_legs: string;
+	    ganyan_cost: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Prediction(source);
@@ -83,6 +102,9 @@ export namespace main {
 	        this.is_completed = source["is_completed"];
 	        this.created_at = this.convertValues(source["created_at"], null);
 	        this.legs = this.convertValues(source["legs"], Leg);
+	        this.ganyan_name = source["ganyan_name"];
+	        this.ganyan_legs = source["ganyan_legs"];
+	        this.ganyan_cost = source["ganyan_cost"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

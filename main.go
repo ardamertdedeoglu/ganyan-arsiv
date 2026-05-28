@@ -24,7 +24,7 @@ func main() {
 
 	// Create application with options
 	err = wails.Run(&options.App{
-		Title:  "ganyan-arsiv",
+		Title:  "Hedef Bülten",
 		Width:  1024,
 		Height: 768,
 		AssetServer: &assetserver.Options{
