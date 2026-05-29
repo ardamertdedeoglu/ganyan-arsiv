@@ -6,6 +6,8 @@ export function CheckForUpdate():Promise<main.UpdateResult>;
 
 export function DeletePrediction(arg1:number):Promise<void>;
 
+export function ForceCheckResults():Promise<void>;
+
 export function GetAppVersion():Promise<string>;
 
 export function GetDailyPrograms(arg1:string):Promise<Array<main.RaceProgram>>;

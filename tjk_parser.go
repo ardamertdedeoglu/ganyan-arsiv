@@ -43,9 +43,10 @@ type Race struct {
 }
 
 type RaceProgram struct {
-	City  string `json:"city"`
-	Date  string `json:"date"`
-	Races []Race `json:"races"`
+	City  string            `json:"city"`
+	Date  string            `json:"date"`
+	Races []Race            `json:"races"`
+	Tevzi map[string]string `json:"tevzi"`
 }
 
 // cityToSehirID maps Turkish city names (as used in CSV) to TJK website SehirId values
@@ -244,6 +245,9 @@ func FetchAllPrograms(date string) []RaceProgram {
 			
 			prog := parseCSVProgram(c, date, resp.Body)
 			resp.Body.Close()
+			if prog != nil {
+				prog.Tevzi = FetchTevzi(c, date)
+			}
 			ch <- result{c, prog}
 		}(city)
 	}
@@ -472,7 +476,11 @@ func FetchSingleProgram(city, date string) *RaceProgram {
 	}
 	defer resp.Body.Close()
 
-	return parseCSVProgram(city, date, resp.Body)
+	prog := parseCSVProgram(city, date, resp.Body)
+	if prog != nil {
+		prog.Tevzi = FetchTevzi(city, date)
+	}
+	return prog
 }
 
 // GetGanyanTypes resolves available Pick 6 types for a city/date, with high-accuracy fallback
@@ -577,4 +585,99 @@ func MergeSilksIntoProgram(prog *RaceProgram) {
 			}
 		}
 	}
+}
+
+// FetchTevzi fetches pool sizes (Dağıtılacak Tutarlar) for a city and date from the TJK results page.
+// Returns a map of betTypeName -> poolSize (e.g. "1. 6'LI GANYAN" -> "12.272.727 ₺")
+func FetchTevzi(city, date string) map[string]string {
+	result := make(map[string]string)
+
+	parsedDate, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return result
+	}
+	ddmmyyyy := parsedDate.Format("02/01/2006")
+
+	client := &http.Client{Timeout: 8 * time.Second}
+
+	// 1. Try to find targetURL dynamically from the main results page tabs
+	mainURL := fmt.Sprintf("https://www.tjk.org/TR/YarisSever/Info/Page/GunlukYarisSonuclari?QueryParameter_Tarih=%s", url.QueryEscape(ddmmyyyy))
+	reqMain, err := http.NewRequest("GET", mainURL, nil)
+	var targetURL string
+	found := false
+
+	if err == nil {
+		reqMain.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+		reqMain.Header.Set("Accept-Language", "tr-TR,tr;q=0.9")
+		respMain, err := client.Do(reqMain)
+		if err == nil && respMain.StatusCode == 200 {
+			docMain, err := goquery.NewDocumentFromReader(respMain.Body)
+			respMain.Body.Close()
+			if err == nil {
+				docMain.Find("ul.gunluk-tabs li a").Each(func(_ int, s *goquery.Selection) {
+					if found {
+						return
+					}
+					tabText := strings.TrimSpace(s.Text())
+					href, _ := s.Attr("href")
+					if strings.Contains(cleanString(tabText), cleanString(city)) {
+						found = true
+						if !strings.HasPrefix(href, "http") {
+							href = "https://www.tjk.org" + href
+						}
+						targetURL = href
+					}
+				})
+			}
+		}
+	}
+
+	// 2. Fallback to hardcoded SehirId if tab is not found dynamically
+	if !found {
+		sehirID, ok := cityToSehirID[city]
+		if !ok {
+			return result
+		}
+		targetURL = fmt.Sprintf(
+			"https://www.tjk.org/TR/YarisSever/Info/Sehir/GunlukYarisSonuclari?SehirId=%d&QueryParameter_Tarih=%s&SehirAdi=%s&Era=today",
+			sehirID,
+			url.QueryEscape(ddmmyyyy),
+			url.QueryEscape(city),
+		)
+	}
+
+	req, err := http.NewRequest("GET", targetURL, nil)
+	if err != nil {
+		return result
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("Accept-Language", "tr-TR,tr;q=0.9")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return result
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return result
+	}
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		return result
+	}
+
+	doc.Find(".tevzi-item").Each(func(_ int, item *goquery.Selection) {
+		divs := item.Children()
+		if divs.Length() >= 2 {
+			name := strings.TrimSpace(divs.Eq(0).Text())
+			val := strings.TrimSpace(divs.Eq(1).Text())
+			if name != "" && val != "" {
+				result[name] = val
+			}
+		}
+	})
+
+	return result
 }

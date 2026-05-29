@@ -10,6 +10,10 @@ export function DeletePrediction(arg1) {
   return window['go']['main']['App']['DeletePrediction'](arg1);
 }
 
+export function ForceCheckResults() {
+  return window['go']['main']['App']['ForceCheckResults']();
+}
+
 export function GetAppVersion() {
   return window['go']['main']['App']['GetAppVersion']();
 }

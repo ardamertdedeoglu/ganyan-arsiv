@@ -11,7 +11,9 @@ import {
   PerformUpdate,
   GetAppVersion,
   GetGanyanTypes,
+  ForceCheckResults,
 } from "../wailsjs/go/main/App";
+import { EventsOn } from "../wailsjs/runtime/runtime";
 
 function renderPerformance(last6) {
   if (!last6) return <span className="text-gray-300 text-s">—</span>;
@@ -99,7 +101,7 @@ function calculatePredictionCost(legsState, packageType = "genis") {
 
   for (const leg of legsState) {
     if (!leg || !leg.predictions) return 0;
-    
+
     let predictionsStr = "";
     if (typeof leg.predictions === "string") {
       predictionsStr = leg.predictions;
@@ -110,7 +112,7 @@ function calculatePredictionCost(legsState, packageType = "genis") {
         if (packageType === "normal") {
           predictionsStr = leg.predictions.slice(0, zeroIndex).join(",");
         } else {
-          predictionsStr = leg.predictions.filter(n => n !== 0).join(",");
+          predictionsStr = leg.predictions.filter((n) => n !== 0).join(",");
         }
       } else {
         predictionsStr = leg.predictions.join(",");
@@ -142,12 +144,184 @@ function calculatePredictionCost(legsState, packageType = "genis") {
   return hasHorses ? product * 1.25 : 0;
 }
 
+const parseAGFPercentage = (agfStr) => {
+  if (!agfStr) return 0;
+  const match = agfStr.match(/%([\d.]+)/);
+  return match ? parseFloat(match[1]) : 0;
+};
+
+function analyzeGanyanCombinations(legsAGF, poolSize = 10000000) {
+  const numLegs = legsAGF.length;
+  if (!legsAGF || numLegs === 0 || legsAGF.some((l) => l.length === 0)) {
+    return null;
+  }
+
+  let combinations = [1];
+  for (const leg of legsAGF) {
+    let nextCombs = [];
+    for (const p of combinations) {
+      for (const agf of leg) {
+        nextCombs.push(p * (agf / 100));
+      }
+    }
+    combinations = nextCombs;
+  }
+
+  let totalWinProb = 0;
+  let minPayout = Infinity;
+  let maxPayout = 0;
+  let totalPayoutSum = 0;
+
+  for (const p of combinations) {
+    totalWinProb += p;
+
+    const expectedWinners = p * (poolSize / 0.625);
+    let payout = 0;
+    if (expectedWinners < 1) {
+      payout = poolSize;
+    } else {
+      payout = poolSize / expectedWinners;
+    }
+
+    if (payout < minPayout) minPayout = payout;
+    if (payout > maxPayout) maxPayout = payout;
+    totalPayoutSum += payout;
+  }
+
+  const avgPayout = totalPayoutSum / combinations.length;
+
+  return {
+    totalWinProb: totalWinProb * 100,
+    minPayout: minPayout === Infinity ? 0 : minPayout,
+    maxPayout: maxPayout,
+    avgPayout: avgPayout,
+    totalColumns: combinations.length,
+  };
+}
+
 function App() {
   const [view, setView] = useState("list"); // 'list' | 'form' | 'program'
   const [predictions, setPredictions] = useState([]);
   const [showPast, setShowPast] = useState(false);
   const [selectedCities, setSelectedCities] = useState([]);
   const [cardModes, setCardModes] = useState({}); // { [predictionId]: 'normal' | 'genis' }
+  const [calculatorPrograms, setCalculatorPrograms] = useState({}); // { [date]: [Programs] }
+  const [loadingCalcProgram, setLoadingCalcProgram] = useState({}); // { [date]: boolean }
+  const [activeCalcCards, setActiveCalcCards] = useState({}); // { [predictionId]: boolean }
+  const [poolSizes, setPoolSizes] = useState({}); // { [predictionId]: number }
+  const [checkingResults, setCheckingResults] = useState(false);
+
+  const handleForceCheckResults = () => {
+    setCheckingResults(true);
+    ForceCheckResults()
+      .then(() => {
+        setTimeout(() => {
+          setCheckingResults(false);
+        }, 1200);
+      })
+      .catch((err) => {
+        console.error("Force check results failed:", err);
+        setCheckingResults(false);
+      });
+  };
+
+  const handleCalculateNeVerir = (pDate, forceRefresh = false) => {
+    const today = new Date().toISOString().split("T")[0];
+    const isTodayOrFuture = pDate >= today;
+
+    if (calculatorPrograms[pDate] && !isTodayOrFuture && !forceRefresh) {
+      return;
+    }
+    setLoadingCalcProgram((prev) => ({ ...prev, [pDate]: true }));
+    GetDailyPrograms(pDate)
+      .then((data) => {
+        setCalculatorPrograms((prev) => ({ ...prev, [pDate]: data || [] }));
+      })
+      .catch((err) => {
+        console.error("Calculator program fetch failed:", err);
+      })
+      .finally(() => {
+        setLoadingCalcProgram((prev) => ({ ...prev, [pDate]: false }));
+      });
+  };
+
+  const getCardAnalysis = (p, mode) => {
+    const pDate = p.date.split("T")[0];
+    const cityProg = calculatorPrograms[pDate]?.find(
+      (cp) => cp.city === p.city,
+    );
+    if (!cityProg) return { status: "no_program" };
+
+    // Get the parsed pool size for this specific ganyan_name
+    let poolSize = 10000000; // Default fallback
+    let isDefaultPool = true;
+    if (cityProg.tevzi && p.ganyan_name && cityProg.tevzi[p.ganyan_name]) {
+      const poolStr = cityProg.tevzi[p.ganyan_name]; // e.g. "12.272.727 ₺"
+      const parsedNum = parseFloat(poolStr.replace(/[^0-9]/g, ""));
+      if (!isNaN(parsedNum) && parsedNum > 0) {
+        poolSize = parsedNum;
+        isDefaultPool = false;
+      }
+    }
+
+    const firstHorses = [];
+    const legsAGF = [];
+    for (const leg of p.legs) {
+      const activeHorses = getLegPredictions(leg.predictions, mode);
+      if (activeHorses.length === 0) {
+        return { status: "invalid_legs" };
+      }
+
+      const firstHorse = activeHorses[0];
+      firstHorses.push(firstHorse);
+
+      const race = cityProg.races?.find((r, idx) => {
+        const nameMatch = r.race_name.match(/(\d+)\./);
+        const rNo = nameMatch ? parseInt(nameMatch[1], 10) : idx + 1;
+        return rNo === leg.leg_number;
+      });
+
+      if (!race || !race.horses) {
+        return { status: "invalid_legs" };
+      }
+
+      const horse = race.horses.find(
+        (h) => parseInt(h.horse_no, 10) === firstHorse,
+      );
+      if (horse) {
+        const agfPercent = parseAGFPercentage(horse.agf);
+        legsAGF.push(agfPercent > 0 ? agfPercent : 1.0);
+      } else {
+        legsAGF.push(1.0);
+      }
+    }
+
+    // P = P1 * P2 * ... * P6
+    let totalWinProb = 1;
+    for (const agf of legsAGF) {
+      totalWinProb *= agf / 100;
+    }
+
+    // Expected winners count in the pool
+    const expectedWinners = totalWinProb * (poolSize / 0.625);
+
+    // Expected payout = Pool Size / Expected Winners (capped at Pool Size)
+    let expectedPayout = 0;
+    if (expectedWinners < 1) {
+      expectedPayout = poolSize;
+    } else {
+      expectedPayout = poolSize / expectedWinners;
+    }
+
+    return {
+      status: "success",
+      totalWinProb: totalWinProb * 100,
+      expectedPayout: expectedPayout,
+      firstHorses: firstHorses,
+      poolSize: poolSize,
+      isDefaultPool: isDefaultPool,
+    };
+  };
 
   const getLegPredictions = (predictionsArray, mode) => {
     if (!predictionsArray) return [];
@@ -157,7 +331,7 @@ function App() {
       if (mode === "normal") {
         return predictionsArray.slice(0, zeroIndex);
       } else {
-        return predictionsArray.filter(n => n !== 0);
+        return predictionsArray.filter((n) => n !== 0);
       }
     }
     return predictionsArray;
@@ -216,6 +390,35 @@ function App() {
         }
       })
       .catch((err) => console.error("Update check failed:", err));
+  }, []);
+
+  // Listen for background worker prediction updates
+  useEffect(() => {
+    const unsubscribe = EventsOn("predictions-updated", () => {
+      loadPredictions();
+      // Refresh cached programs for any currently loaded dates to update Tevzi and AGF values
+      setCalculatorPrograms((prev) => {
+        const next = { ...prev };
+        Object.keys(next).forEach((date) => {
+          GetDailyPrograms(date)
+            .then((data) => {
+              setCalculatorPrograms((curr) => ({
+                ...curr,
+                [date]: data || [],
+              }));
+            })
+            .catch((err) =>
+              console.error("Error refreshing program on worker update:", err),
+            );
+        });
+        return next;
+      });
+    });
+    return () => {
+      if (typeof unsubscribe === "function") {
+        unsubscribe();
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -508,19 +711,26 @@ function App() {
   }
 
   // At numaralarını SÜTUN halinde göstermek için yardımcı fonksiyon
-  const renderHorseBadges = (preds) => {
+  const renderHorseBadges = (preds, winnerHorse = 0) => {
     if (!preds || preds.length === 0)
       return <span className="text-gray-400 text-sm">-</span>;
     return (
       <div className="flex flex-col gap-1.5 mt-1">
-        {preds.map((p, idx) => (
-          <div
-            key={idx}
-            className="w-9 h-9 flex items-center justify-center bg-white border-2 border-emerald-500 text-emerald-700 font-bold rounded-full shadow-sm text-sm"
-          >
-            {p}
-          </div>
-        ))}
+        {preds.map((p, idx) => {
+          const isWinner = winnerHorse > 0 && p === winnerHorse;
+          return (
+            <div
+              key={idx}
+              className={`w-9 h-9 flex items-center justify-center font-bold rounded-full shadow-sm text-sm transition-all duration-300 ${
+                isWinner
+                  ? "bg-emerald-600 border-2 border-emerald-600 text-white shadow-emerald-500/20 scale-105"
+                  : "bg-white border-2 border-emerald-500 text-emerald-700 hover:bg-emerald-50"
+              }`}
+            >
+              {p}
+            </div>
+          );
+        })}
       </div>
     );
   };
@@ -941,8 +1151,10 @@ function App() {
             {(() => {
               const costNormal = calculatePredictionCost(editLegs, "normal");
               const costGenis = calculatePredictionCost(editLegs, "genis");
-              const hasSlash = editLegs.some(l => l.predictions.includes("/"));
-              
+              const hasSlash = editLegs.some((l) =>
+                l.predictions.includes("/"),
+              );
+
               return (
                 <div className="flex items-center gap-2.5 bg-emerald-50 text-emerald-800 px-4 py-2 rounded-xl border border-emerald-100 select-none">
                   <svg
@@ -964,7 +1176,20 @@ function App() {
                     </span>
                     {hasSlash ? (
                       <span className="font-bold text-xs leading-normal block mt-0.5">
-                        Norm: <span className="font-extrabold text-emerald-700">{costNormal.toLocaleString("tr-TR", { minimumFractionDigits: 2 })} ₺</span> | Gen: <span className="font-extrabold text-indigo-700">{costGenis.toLocaleString("tr-TR", { minimumFractionDigits: 2 })} ₺</span>
+                        Norm:{" "}
+                        <span className="font-extrabold text-emerald-700">
+                          {costNormal.toLocaleString("tr-TR", {
+                            minimumFractionDigits: 2,
+                          })}{" "}
+                          ₺
+                        </span>{" "}
+                        | Gen:{" "}
+                        <span className="font-extrabold text-indigo-700">
+                          {costGenis.toLocaleString("tr-TR", {
+                            minimumFractionDigits: 2,
+                          })}{" "}
+                          ₺
+                        </span>
                       </span>
                     ) : (
                       <span className="font-extrabold text-sm leading-tight">
@@ -1344,8 +1569,8 @@ function App() {
               {(() => {
                 const costNormal = calculatePredictionCost(legs, "normal");
                 const costGenis = calculatePredictionCost(legs, "genis");
-                const hasSlash = legs.some(l => l.predictions.includes("/"));
-                
+                const hasSlash = legs.some((l) => l.predictions.includes("/"));
+
                 return (
                   <div className="mt-10 flex flex-col md:flex-row items-center justify-between border-t border-gray-100 pt-6 gap-4">
                     <div className="flex items-center gap-3 bg-emerald-50 text-emerald-800 px-6 py-3.5 rounded-2xl border border-emerald-100 shadow-sm select-none">
@@ -1369,10 +1594,22 @@ function App() {
                         {hasSlash ? (
                           <div className="text-sm font-bold leading-tight mt-0.5 space-y-0.5">
                             <div>
-                              Normal Paket: <span className="font-extrabold text-emerald-700">{costNormal.toLocaleString("tr-TR", { minimumFractionDigits: 2 })} ₺</span>
+                              Normal Paket:{" "}
+                              <span className="font-extrabold text-emerald-700">
+                                {costNormal.toLocaleString("tr-TR", {
+                                  minimumFractionDigits: 2,
+                                })}{" "}
+                                ₺
+                              </span>
                             </div>
                             <div>
-                              Geniş Paket: <span className="font-extrabold text-indigo-700">{costGenis.toLocaleString("tr-TR", { minimumFractionDigits: 2 })} ₺</span>
+                              Geniş Paket:{" "}
+                              <span className="font-extrabold text-indigo-700">
+                                {costGenis.toLocaleString("tr-TR", {
+                                  minimumFractionDigits: 2,
+                                })}{" "}
+                                ₺
+                              </span>
                             </div>
                           </div>
                         ) : (
@@ -1400,144 +1637,157 @@ function App() {
         )}
 
         {/* List View */}
-        {view === "list" && (() => {
-          const today = new Date();
-          const yyyy = today.getFullYear();
-          const mm = String(today.getMonth() + 1).padStart(2, '0');
-          const dd = String(today.getDate()).padStart(2, '0');
-          const todayStr = `${yyyy}-${mm}-${dd}`;
+        {view === "list" &&
+          (() => {
+            const today = new Date();
+            const yyyy = today.getFullYear();
+            const mm = String(today.getMonth() + 1).padStart(2, "0");
+            const dd = String(today.getDate()).padStart(2, "0");
+            const todayStr = `${yyyy}-${mm}-${dd}`;
 
-          const uniqueCities = [...new Set(predictions.map((p) => p.city).filter(Boolean))].sort();
+            const uniqueCities = [
+              ...new Set(predictions.map((p) => p.city).filter(Boolean)),
+            ].sort();
 
-          const toggleCityFilter = (city) => {
-            if (selectedCities.includes(city)) {
-              setSelectedCities(selectedCities.filter((c) => c !== city));
-            } else {
-              setSelectedCities([...selectedCities, city]);
-            }
-          };
+            const toggleCityFilter = (city) => {
+              if (selectedCities.includes(city)) {
+                setSelectedCities(selectedCities.filter((c) => c !== city));
+              } else {
+                setSelectedCities([...selectedCities, city]);
+              }
+            };
 
-          const displayedPredictions = predictions.filter((p) => {
-            const isPast = p.date && p.date.split("T")[0] < todayStr;
-            const matchesPastFilter = showPast ? true : !isPast;
-            const matchesCityFilter = selectedCities.length === 0 ? true : selectedCities.includes(p.city);
-            return matchesPastFilter && matchesCityFilter;
-          });
+            const displayedPredictions = predictions.filter((p) => {
+              const isPast = p.date && p.date.split("T")[0] < todayStr;
+              const matchesPastFilter = showPast ? true : !isPast;
+              const matchesCityFilter =
+                selectedCities.length === 0
+                  ? true
+                  : selectedCities.includes(p.city);
+              return matchesPastFilter && matchesCityFilter;
+            });
 
-          return (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              {predictions.length > 0 && (
-                <div className="bg-white border border-gray-100 p-5 rounded-3xl shadow-sm space-y-4">
-                  {/* Top Bar: Count & Filters */}
-                  <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pb-4 border-b border-gray-100/70">
-                    <div className="text-slate-600 text-sm font-medium">
-                      Toplam <span className="font-bold text-slate-800">{predictions.length}</span> tahminden{" "}
-                      <span className="font-bold text-emerald-700">{displayedPredictions.length}</span> tanesi gösteriliyor.
+            return (
+              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                {predictions.length > 0 && (
+                  <div className="bg-white border border-gray-100 p-5 rounded-3xl shadow-sm space-y-4">
+                    {/* Top Bar: Count & Filters */}
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pb-4 border-b border-gray-100/70">
+                      <div className="text-slate-600 text-sm font-medium">
+                        Toplam{" "}
+                        <span className="font-bold text-slate-800">
+                          {predictions.length}
+                        </span>{" "}
+                        tahminden{" "}
+                        <span className="font-bold text-emerald-700">
+                          {displayedPredictions.length}
+                        </span>{" "}
+                        tanesi gösteriliyor.
+                      </div>
+                      <div className="flex flex-wrap items-center gap-4">
+                        {/* Force Check Results Button */}
+                        <button
+                          onClick={handleForceCheckResults}
+                          disabled={checkingResults}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all duration-300 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed select-none ${
+                            checkingResults
+                              ? "bg-slate-800 text-white border-slate-700 shadow-sm"
+                              : "bg-emerald-50 text-emerald-700 border-emerald-100 hover:bg-emerald-100 hover:text-emerald-800"
+                          }`}
+                          title="TJK yarış sonuçlarını hemen kontrol et ve tahminleri güncelle"
+                        >
+                          <div className="flex items-center gap-1">
+                            {checkingResults
+                              ? "Güncelleniyor..."
+                              : "Sonuçları Güncelle"}
+                          </div>
+                        </button>
+
+                        {/* Past Toggle */}
+                        <label className="flex items-center gap-3 cursor-pointer select-none group">
+                          <div className="relative">
+                            <input
+                              type="checkbox"
+                              checked={showPast}
+                              onChange={(e) => setShowPast(e.target.checked)}
+                              className="sr-only"
+                            />
+                            <div
+                              className={`w-11 h-6 rounded-full transition-all duration-300 ${
+                                showPast
+                                  ? "bg-emerald-600 shadow-md"
+                                  : "bg-gray-200"
+                              }`}
+                            />
+                            <div
+                              className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-all duration-300 ${
+                                showPast ? "translate-x-5" : "translate-x-0"
+                              }`}
+                            />
+                          </div>
+                          <span className="text-sm font-bold text-slate-700 group-hover:text-slate-900 transition-colors">
+                            Geçmiş Tahminleri Göster
+                          </span>
+                        </label>
+                      </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-4">
-                      {/* Past Toggle */}
-                      <label className="flex items-center gap-3 cursor-pointer select-none group">
-                        <div className="relative">
-                          <input
-                            type="checkbox"
-                            checked={showPast}
-                            onChange={(e) => setShowPast(e.target.checked)}
-                            className="sr-only"
-                          />
-                          <div
-                            className={`w-11 h-6 rounded-full transition-all duration-300 ${
-                              showPast ? "bg-emerald-600 shadow-md" : "bg-gray-200"
-                            }`}
-                          />
-                          <div
-                            className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-all duration-300 ${
-                              showPast ? "translate-x-5" : "translate-x-0"
-                            }`}
-                          />
-                        </div>
-                        <span className="text-sm font-bold text-slate-700 group-hover:text-slate-900 transition-colors">
-                          Geçmiş Tahminleri Göster
+
+                    {/* City Filters */}
+                    {uniqueCities.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider mr-2">
+                          Şehir Filtresi:
                         </span>
-                      </label>
-                    </div>
+                        <button
+                          onClick={() => setSelectedCities([])}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                            selectedCities.length === 0
+                              ? "bg-slate-800 text-white shadow-sm"
+                              : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                          }`}
+                        >
+                          Tümü
+                        </button>
+                        {uniqueCities.map((city) => {
+                          const isActive = selectedCities.includes(city);
+                          return (
+                            <button
+                              key={city}
+                              onClick={() => toggleCityFilter(city)}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                                isActive
+                                  ? "bg-emerald-600 text-white shadow-sm"
+                                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                              }`}
+                            >
+                              {isActive && (
+                                <svg
+                                  className="w-3 h-3 stroke-[3]"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    d="M4.5 12.75l6 6 9-13.5"
+                                  />
+                                </svg>
+                              )}
+                              {city}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
+                )}
 
-                  {/* City Filters */}
-                  {uniqueCities.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider mr-2">Şehir Filtresi:</span>
-                      <button
-                        onClick={() => setSelectedCities([])}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                          selectedCities.length === 0
-                            ? "bg-slate-800 text-white shadow-sm"
-                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                        }`}
-                      >
-                        Tümü
-                      </button>
-                      {uniqueCities.map((city) => {
-                        const isActive = selectedCities.includes(city);
-                        return (
-                          <button
-                            key={city}
-                            onClick={() => toggleCityFilter(city)}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                              isActive
-                                ? "bg-emerald-600 text-white shadow-sm"
-                                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                            }`}
-                          >
-                            {isActive && (
-                              <svg className="w-3 h-3 stroke-[3]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                              </svg>
-                            )}
-                            {city}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {predictions.length === 0 ? (
-                <div className="text-center py-24 bg-white rounded-3xl border border-gray-100 shadow-sm">
-                  <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <svg
-                      className="w-10 h-10 text-gray-300"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                      />
-                    </svg>
-                  </div>
-                  <p className="text-xl text-gray-600 font-medium">
-                    Henüz kayıtlı bir tahmin yok
-                  </p>
-                  <button
-                    onClick={() => setView("form")}
-                    className="mt-4 text-emerald-600 font-bold hover:underline"
-                  >
-                    İlk veriyi ekleyerek başla
-                  </button>
-                </div>
-              ) : displayedPredictions.length === 0 ? (() => {
-                const hasCityFilter = selectedCities.length > 0;
-                const hasPastFilter = !showPast;
-                
-                return (
-                  <div className="text-center py-20 bg-white rounded-3xl border border-gray-100 shadow-sm animate-in fade-in duration-300">
-                    <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                {predictions.length === 0 ? (
+                  <div className="text-center py-24 bg-white rounded-3xl border border-gray-100 shadow-sm">
+                    <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
                       <svg
-                        className="w-10 h-10 text-emerald-600"
+                        className="w-10 h-10 text-gray-300"
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"
@@ -1546,111 +1796,149 @@ function App() {
                           strokeLinecap="round"
                           strokeLinejoin="round"
                           strokeWidth={2}
-                          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                          d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
                         />
                       </svg>
                     </div>
-                    <p className="text-xl text-gray-600 font-semibold px-4">
-                      Kriterlere uygun tahmin bulunamadı.
+                    <p className="text-xl text-gray-600 font-medium">
+                      Henüz kayıtlı bir tahmin yok
                     </p>
-                    <p className="text-gray-400 text-sm mt-1.5 px-4 font-medium">
-                      {hasPastFilter && hasCityFilter 
-                        ? "Seçilen şehirlerde güncel tahmin bulunmuyor. Şehir filtrelerini temizleyebilir veya geçmiş tahminleri göstermeyi deneyebilirsiniz."
-                        : hasCityFilter 
-                        ? "Seçilen şehirlerde kriterlerinize uygun tahmin bulunmuyor. Şehir filtrelerini temizlemeyi deneyebilirsiniz."
-                        : "Güncel tahmininiz bulunmuyor. Geçmiş tahminleri göstermeyi deneyebilirsiniz."}
-                    </p>
-                    <div className="mt-6 flex flex-wrap justify-center gap-3">
-                      {hasCityFilter && (
-                        <button
-                          onClick={() => setSelectedCities([])}
-                          className="px-5 py-2.5 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 transition shadow-sm"
-                        >
-                          Filtreleri Temizle
-                        </button>
-                      )}
-                      {hasPastFilter && (
-                        <button
-                          onClick={() => setShowPast(true)}
-                          className="px-5 py-2.5 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 transition shadow-sm"
-                        >
-                          Geçmiş Tahminleri Göster
-                        </button>
-                      )}
-                    </div>
+                    <button
+                      onClick={() => setView("form")}
+                      className="mt-4 text-emerald-600 font-bold hover:underline"
+                    >
+                      İlk veriyi ekleyerek başla
+                    </button>
                   </div>
-                );
-              })() : (
-                <div className="grid grid-cols-1 gap-6">
-                  {displayedPredictions.map((p) => {
-                    const isPast = p.date && p.date.split("T")[0] < todayStr;
-                    const hasSlashInCard = p.legs && p.legs.some(leg => leg.predictions && leg.predictions.includes(0));
-                    const activeMode = cardModes[p.id] || "normal";
-                    
+                ) : displayedPredictions.length === 0 ? (
+                  (() => {
+                    const hasCityFilter = selectedCities.length > 0;
+                    const hasPastFilter = !showPast;
+
                     return (
-                      <div
-                        key={p.id}
-                        className={`bg-white border border-gray-100 rounded-3xl p-6 shadow-sm hover:shadow-lg transition-all relative overflow-hidden group ${
-                          isPast ? "opacity-60 grayscale-[10%]" : ""
-                        }`}
-                      >
-                        <div
-                          className={`absolute top-0 left-0 w-2 h-full ${
-                            isPast ? "bg-slate-300" : "bg-emerald-500"
-                          }`}
-                        />
-
-                        {/* Action buttons */}
-                        <div className="absolute top-6 right-6 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            onClick={() => startEditing(p)}
-                            className="text-gray-400 hover:text-emerald-600 bg-gray-50 hover:bg-emerald-50 p-2 rounded-full transition-colors"
-                            title="Düzenle"
+                      <div className="text-center py-20 bg-white rounded-3xl border border-gray-100 shadow-sm animate-in fade-in duration-300">
+                        <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                          <svg
+                            className="w-10 h-10 text-emerald-600"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
                           >
-                            <svg
-                              className="w-5 h-5"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                              />
-                            </svg>
-                          </button>
-                          <button
-                            onClick={() => handleDelete(p.id)}
-                            className="text-gray-400 hover:text-red-500 bg-gray-50 hover:bg-red-50 p-2 rounded-full transition-colors"
-                            title="Sil"
-                          >
-                            <svg
-                              className="w-5 h-5"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                              />
-                            </svg>
-                          </button>
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                            />
+                          </svg>
                         </div>
+                        <p className="text-xl text-gray-600 font-semibold px-4">
+                          Kriterlere uygun tahmin bulunamadı.
+                        </p>
+                        <p className="text-gray-400 text-sm mt-1.5 px-4 font-medium">
+                          {hasPastFilter && hasCityFilter
+                            ? "Seçilen şehirlerde güncel tahmin bulunmuyor. Şehir filtrelerini temizleyebilir veya geçmiş tahminleri göstermeyi deneyebilirsiniz."
+                            : hasCityFilter
+                              ? "Seçilen şehirlerde kriterlerinize uygun tahmin bulunmuyor. Şehir filtrelerini temizlemeyi deneyebilirsiniz."
+                              : "Güncel tahmininiz bulunmuyor. Geçmiş tahminleri göstermeyi deneyebilirsiniz."}
+                        </p>
+                        <div className="mt-6 flex flex-wrap justify-center gap-3">
+                          {hasCityFilter && (
+                            <button
+                              onClick={() => setSelectedCities([])}
+                              className="px-5 py-2.5 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 transition shadow-sm"
+                            >
+                              Filtreleri Temizle
+                            </button>
+                          )}
+                          {hasPastFilter && (
+                            <button
+                              onClick={() => setShowPast(true)}
+                              className="px-5 py-2.5 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 transition shadow-sm"
+                            >
+                              Geçmiş Tahminleri Göster
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()
+                ) : (
+                  <div className="grid grid-cols-1 gap-6">
+                    {displayedPredictions.map((p) => {
+                      const isPast = p.date && p.date.split("T")[0] < todayStr;
+                      const hasSlashInCard =
+                        p.legs &&
+                        p.legs.some(
+                          (leg) =>
+                            leg.predictions && leg.predictions.includes(0),
+                        );
+                      const activeMode = cardModes[p.id] || "normal";
 
-                        <div className="flex flex-col md:flex-row md:items-center gap-4 mb-6 pr-24 pl-4">
-                          <div>
-                            <h3 className="text-2xl font-extrabold text-gray-800">
-                              {p.city}
-                            </h3>
-                            <div className="flex items-center gap-2 mt-1">
-                              <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-md text-sm font-semibold flex items-center gap-1">
+                      return (
+                        <div
+                          key={p.id}
+                          className={`bg-white border border-gray-100 rounded-3xl p-6 shadow-sm hover:shadow-lg transition-all relative overflow-hidden group ${
+                            isPast ? "opacity-60 grayscale-[10%]" : ""
+                          }`}
+                        >
+                          <div
+                            className={`absolute top-0 left-0 w-2 h-full ${
+                              isPast ? "bg-slate-300" : "bg-emerald-500"
+                            }`}
+                          />
+
+                          {/* Action buttons */}
+                          <div className="absolute top-6 right-6 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={() => startEditing(p)}
+                              className="text-gray-400 hover:text-emerald-600 bg-gray-50 hover:bg-emerald-50 p-2 rounded-full transition-colors"
+                              title="Düzenle"
+                            >
+                              <svg
+                                className="w-5 h-5"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                                />
+                              </svg>
+                            </button>
+                            <button
+                              onClick={() => handleDelete(p.id)}
+                              className="text-gray-400 hover:text-red-500 bg-gray-50 hover:bg-red-50 p-2 rounded-full transition-colors"
+                              title="Sil"
+                            >
+                              <svg
+                                className="w-5 h-5"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                />
+                              </svg>
+                            </button>
+                          </div>
+
+                          <div className="flex flex-col gap-3.5 mb-6 pl-4 pr-16 md:pr-24">
+                            {/* Row 1: City, Date, Status */}
+                            <div className="flex flex-wrap items-center gap-3">
+                              <h3 className="text-2xl font-black text-slate-800 tracking-tight">
+                                {p.city}
+                              </h3>
+                              <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-slate-200/50">
                                 <svg
-                                  className="w-4 h-4"
+                                  className="w-3.5 h-3.5"
                                   fill="none"
                                   stroke="currentColor"
                                   viewBox="0 0 24 24"
@@ -1662,15 +1950,34 @@ function App() {
                                     d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
                                   />
                                 </svg>
-                                {p.date.split("T")[0].split("-").reverse().join("-")}
+                                {p.date
+                                  .split("T")[0]
+                                  .split("-")
+                                  .reverse()
+                                  .join("-")}
                               </span>
                               {isPast && (
-                                <span className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded text-xs font-bold border border-slate-200/60 flex items-center gap-1 uppercase tracking-wider select-none">
+                                <span className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded-lg text-[10px] font-bold border border-slate-200/60 flex items-center gap-1 uppercase tracking-wider select-none">
                                   ⏱ Geçmiş
                                 </span>
                               )}
+                              <span
+                                className={`px-3 py-1 rounded-xl text-xs font-bold border shadow-sm ${
+                                  p.is_completed
+                                    ? "bg-indigo-50 text-indigo-700 border-indigo-100"
+                                    : "bg-amber-50 text-amber-700 border-amber-100"
+                                }`}
+                              >
+                                {p.is_completed
+                                  ? "✓ Sonuçlandı"
+                                  : "⏱ Sonuç Bekleniyor"}
+                              </span>
+                            </div>
+
+                            {/* Row 2: Ganyan Type, Cost, Mode Switcher, Ne Verir Button */}
+                            <div className="flex flex-wrap items-center gap-2.5 pt-2 border-t border-slate-100/70">
                               {p.ganyan_name && (
-                                <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-md text-sm font-extrabold border border-emerald-100 shadow-sm flex items-center gap-1">
+                                <span className="bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-xl text-xs font-black border border-emerald-100 shadow-sm flex items-center gap-1.5">
                                   <svg
                                     className="w-3.5 h-3.5 stroke-[2.5]"
                                     fill="none"
@@ -1687,14 +1994,39 @@ function App() {
                                 </span>
                               )}
                               {(() => {
-                                const dynamicCost = calculatePredictionCost(p.legs, activeMode);
+                                const progDate = p.date.split("T")[0];
+                                const cityProg = calculatorPrograms[
+                                  progDate
+                                ]?.find((cp) => cp.city === p.city);
+                                if (
+                                  cityProg &&
+                                  cityProg.tevzi &&
+                                  p.ganyan_name &&
+                                  cityProg.tevzi[p.ganyan_name]
+                                ) {
+                                  const poolStr = cityProg.tevzi[p.ganyan_name]; // e.g. "12.272.727 ₺"
+                                  return (
+                                    <span className="bg-amber-50 text-amber-700 px-3 py-1.5 rounded-xl text-xs font-black border border-amber-100 shadow-sm flex items-center gap-1.5 animate-in fade-in duration-300">
+                                      💰 Havuz: {poolStr}
+                                    </span>
+                                  );
+                                }
+                                return null;
+                              })()}
+                              {(() => {
+                                const dynamicCost = calculatePredictionCost(
+                                  p.legs,
+                                  activeMode,
+                                );
                                 if (dynamicCost <= 0) return null;
                                 return (
-                                  <span className={`px-3 py-1 rounded-md text-sm font-black shadow-sm flex items-center gap-1 border transition-colors duration-300 ${
-                                    activeMode === "normal" 
-                                      ? "bg-emerald-50 text-emerald-700 border-emerald-100" 
-                                      : "bg-indigo-50 text-indigo-700 border-indigo-100"
-                                  }`}>
+                                  <span
+                                    className={`px-3 py-1.5 rounded-xl text-xs font-black shadow-sm flex items-center gap-1.5 border transition-colors duration-300 ${
+                                      activeMode === "normal"
+                                        ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+                                        : "bg-indigo-50 text-indigo-700 border-indigo-100"
+                                    }`}
+                                  >
                                     {dynamicCost.toLocaleString("tr-TR", {
                                       minimumFractionDigits: 2,
                                       maximumFractionDigits: 2,
@@ -1703,89 +2035,305 @@ function App() {
                                   </span>
                                 );
                               })()}
-                            </div>
-                          </div>
-
-                          {/* Card specific mode switcher */}
-                          {hasSlashInCard && (
-                            <div className="flex bg-slate-100 p-0.5 rounded-xl border border-slate-200/50 shadow-inner md:ml-4 select-none animate-in fade-in duration-300">
-                              <button
-                                onClick={() => setCardModes(prev => ({ ...prev, [p.id]: "normal" }))}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                                  activeMode === "normal"
-                                    ? "bg-white text-emerald-700 shadow-sm"
-                                    : "text-slate-500 hover:text-slate-800"
-                                }`}
-                              >
-                                Normal
-                              </button>
-                              <button
-                                onClick={() => setCardModes(prev => ({ ...prev, [p.id]: "genis" }))}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                                  activeMode === "genis"
-                                    ? "bg-white text-indigo-700 shadow-sm"
-                                    : "text-slate-500 hover:text-slate-800"
-                                }`}
-                              >
-                                Geniş
-                              </button>
-                            </div>
-                          )}
-
-                          <div className="md:ml-auto">
-                            <span
-                              className={`px-4 py-1.5 rounded-full text-sm font-bold shadow-sm ${
-                                p.is_completed
-                                  ? "bg-indigo-100 text-indigo-700 border border-indigo-200"
-                                  : "bg-amber-100 text-amber-700 border border-amber-200"
-                              }`}
-                            >
-                              {p.is_completed
-                                ? "✓ Sonuçlandı"
-                                : "⏱ Sonuç Bekleniyor"}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Legs - alt alta dizili at numaraları */}
-                        <div className="grid grid-cols-3 sm:grid-cols-6 gap-4 pl-4">
-                          {p.legs &&
-                            p.legs.map((leg, i) => (
-                              <div
-                                key={i}
-                                className={`border border-gray-100 rounded-2xl p-3 transition-colors ${
-                                  isPast
-                                    ? "bg-slate-50 hover:bg-slate-100"
-                                    : "bg-gray-50 hover:bg-emerald-50"
-                                }`}
-                              >
-                                <div className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">
-                                  {p.ganyan_legs
-                                    ? `${leg.leg_number}. Koşu`
-                                    : `${leg.leg_number}. Ayak`}
+                              {hasSlashInCard && (
+                                <div className="flex bg-slate-100 p-0.5 rounded-xl border border-slate-200/50 shadow-inner select-none animate-in fade-in duration-300">
+                                  <button
+                                    onClick={() =>
+                                      setCardModes((prev) => ({
+                                        ...prev,
+                                        [p.id]: "normal",
+                                      }))
+                                    }
+                                    className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                                      activeMode === "normal"
+                                        ? "bg-white text-emerald-700 shadow-sm"
+                                        : "text-slate-500 hover:text-slate-800"
+                                    }`}
+                                  >
+                                    Normal
+                                  </button>
+                                  <button
+                                    onClick={() =>
+                                      setCardModes((prev) => ({
+                                        ...prev,
+                                        [p.id]: "genis",
+                                      }))
+                                    }
+                                    className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                                      activeMode === "genis"
+                                        ? "bg-white text-indigo-700 shadow-sm"
+                                        : "text-slate-500 hover:text-slate-800"
+                                    }`}
+                                  >
+                                    Geniş
+                                  </button>
                                 </div>
-                                {renderHorseBadges(getLegPredictions(leg.predictions, activeMode))}
-                                {leg.winner_horse > 0 && (
-                                  <div className="mt-2 flex items-center gap-1">
-                                    <span className="text-xs text-gray-400">
-                                      Kazanan:
-                                    </span>
-                                    <span className="w-6 h-6 flex items-center justify-center bg-indigo-100 text-indigo-700 font-bold rounded-full text-xs border border-indigo-200">
-                                      {leg.winner_horse}
+                              )}
+                              {(() => {
+                                const isExpanded =
+                                  activeCalcCards[p.id] || false;
+                                return (
+                                  <button
+                                    onClick={() => {
+                                      const nextExpanded = !isExpanded;
+                                      setActiveCalcCards((prev) => ({
+                                        ...prev,
+                                        [p.id]: nextExpanded,
+                                      }));
+                                      if (nextExpanded) {
+                                        handleCalculateNeVerir(
+                                          p.date.split("T")[0],
+                                          true,
+                                        );
+                                      }
+                                    }}
+                                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border flex items-center gap-1 transition-all select-none cursor-pointer ${
+                                      isExpanded
+                                        ? "bg-slate-800 text-white border-slate-700 shadow-sm"
+                                        : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-800"
+                                    }`}
+                                  >
+                                    <svg
+                                      className={`w-3.5 h-3.5 transition-transform duration-300 ${isExpanded ? "rotate-180" : ""}`}
+                                      fill="none"
+                                      stroke="currentColor"
+                                      viewBox="0 0 24 24"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2.5}
+                                        d="M19 9l-7 7-7-7"
+                                      />
+                                    </svg>
+                                    Ne Verir?
+                                  </button>
+                                );
+                              })()}
+                            </div>
+                          </div>
+
+                          {/* Legs - alt alta dizili at numaraları */}
+                          <div className="grid grid-cols-3 sm:grid-cols-6 gap-4 pl-4">
+                            {p.legs &&
+                              p.legs.map((leg, i) => {
+                                const activePreds = getLegPredictions(
+                                  leg.predictions,
+                                  activeMode,
+                                );
+                                const hasWinnerInLeg = leg.winner_horse > 0;
+                                const isWinnerGuessed =
+                                  hasWinnerInLeg &&
+                                  activePreds.includes(leg.winner_horse);
+                                const isLegLost =
+                                  hasWinnerInLeg && !isWinnerGuessed;
+
+                                return (
+                                  <div
+                                    key={i}
+                                    className={`border transition-all relative overflow-hidden rounded-2xl p-3 ${
+                                      isLegLost
+                                        ? "bg-red-50/40 border-red-200/60 opacity-60 text-slate-400 line-through decoration-red-500/80 decoration-2"
+                                        : isWinnerGuessed
+                                          ? "bg-emerald-50/30 border-emerald-200/60 ring-1 ring-emerald-500/10 shadow-sm shadow-emerald-500/5"
+                                          : isPast
+                                            ? "bg-slate-50 border-gray-100 hover:bg-slate-100"
+                                            : "bg-gray-50 border-gray-100 hover:bg-emerald-50"
+                                    }`}
+                                  >
+                                    <div className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">
+                                      {p.ganyan_legs
+                                        ? `${leg.leg_number}. Koşu`
+                                        : `${leg.leg_number}. Ayak`}
+                                    </div>
+                                    {renderHorseBadges(
+                                      activePreds,
+                                      leg.winner_horse,
+                                    )}
+                                    {leg.winner_horse > 0 && (
+                                      <div className="mt-2 flex items-center gap-1">
+                                        <span className="text-xs text-gray-400">
+                                          Kazanan:
+                                        </span>
+                                        <span
+                                          className={`w-6 h-6 flex items-center justify-center font-bold rounded-full text-xs border ${
+                                            isWinnerGuessed
+                                              ? "bg-emerald-100 text-emerald-700 border-emerald-200"
+                                              : "bg-red-100 text-red-700 border-red-200"
+                                          }`}
+                                        >
+                                          {leg.winner_horse}
+                                        </span>
+                                      </div>
+                                    )}
+                                    {isLegLost && (
+                                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                        <div className="w-[140%] h-[2.5px] bg-red-500/30 rotate-12 transform absolute" />
+                                        <div className="w-[140%] h-[2.5px] bg-red-500/30 -rotate-12 transform absolute" />
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                          </div>
+
+                          {/* Ne Verir Panel */}
+                          {(() => {
+                            const isExpanded = activeCalcCards[p.id] || false;
+                            const pDate = p.date.split("T")[0];
+
+                            if (!isExpanded) return null;
+
+                            return (
+                              <div className="mt-6 pt-6 border-t border-gray-100 animate-in fade-in slide-in-from-top-4 duration-300">
+                                {loadingCalcProgram[pDate] ? (
+                                  <div className="flex items-center justify-center gap-3 py-6 text-slate-500 font-medium bg-slate-50 rounded-2xl border border-slate-100">
+                                    <div className="w-5 h-5 rounded-full border-2 border-slate-300 border-t-emerald-500 animate-spin" />
+                                    <span>
+                                      Yarış Bülteni Yükleniyor ve
+                                      Eşleştiriliyor...
                                     </span>
                                   </div>
+                                ) : (
+                                  (() => {
+                                    const analysis = getCardAnalysis(
+                                      p,
+                                      activeMode,
+                                    );
+
+                                    if (analysis.status === "no_program") {
+                                      return (
+                                        <div className="text-center py-6 bg-amber-50/50 border border-amber-100 rounded-2xl text-amber-700 text-sm font-semibold select-none">
+                                          ⚠️ Bu tarihe ait bülten bültenler
+                                          arasında bulunamadı veya henüz
+                                          yüklenmedi.
+                                        </div>
+                                      );
+                                    }
+
+                                    if (analysis.status === "invalid_legs") {
+                                      return (
+                                        <div className="text-center py-6 bg-red-50 border border-red-100 rounded-2xl text-red-700 text-sm font-semibold select-none">
+                                          ❌ Tahmin bilgileri eksik veya at
+                                          seçimi yapılmamış.
+                                        </div>
+                                      );
+                                    }
+
+                                    return (
+                                      <div className="bg-slate-900 text-slate-100 rounded-3xl p-6 shadow-inner space-y-6">
+                                        {/* Header: Panel Title */}
+                                        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                                          <h4 className="font-extrabold text-sm uppercase tracking-wider text-emerald-400 flex items-center gap-2">
+                                            📊 İlk Tercih İkramiye Beklentisi
+                                            (AGF Analizi)
+                                          </h4>
+                                          <span className="bg-slate-800 text-slate-300 px-2.5 py-1 rounded-lg text-xs font-bold border border-slate-700 select-none">
+                                            İlk Tercih Kombinasyonu
+                                          </span>
+                                        </div>
+
+                                        {/* Portfolio Metrics Grid */}
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                          {/* Kazanma Olasılığı */}
+                                          <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-800/80">
+                                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">
+                                              Kombinasyon Kazanma İhtimali
+                                            </span>
+                                            <span className="text-2xl font-black text-emerald-400">
+                                              %{" "}
+                                              {analysis.totalWinProb.toLocaleString(
+                                                "tr-TR",
+                                                { maximumFractionDigits: 6 },
+                                              )}
+                                            </span>
+                                          </div>
+
+                                          {/* Tahmini Ödeme */}
+                                          <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-800/80">
+                                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">
+                                              Tahmini İkramiye Ödemesi (6'lı
+                                              Ganyan)
+                                            </span>
+                                            <span className="text-2xl font-black text-indigo-400">
+                                              {analysis.expectedPayout.toLocaleString(
+                                                "tr-TR",
+                                                {
+                                                  minimumFractionDigits: 2,
+                                                  maximumFractionDigits: 2,
+                                                },
+                                              )}{" "}
+                                              ₺
+                                            </span>
+                                          </div>
+                                        </div>
+
+                                        {/* Birinci Atlar Kombinasyonu */}
+                                        <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800 flex items-center justify-between flex-wrap gap-2">
+                                          <div>
+                                            <span className="text-xs font-bold text-slate-400 block">
+                                              Birinci Tercihler
+                                            </span>
+                                            <span className="text-xs text-slate-500 font-medium">
+                                              Ayaklardaki ilk atların
+                                              kombinasyonu.
+                                            </span>
+                                          </div>
+                                          <div className="flex gap-2">
+                                            {analysis.firstHorses.map(
+                                              (hNo, idx) => (
+                                                <span
+                                                  key={idx}
+                                                  className="w-8 h-8 rounded-full bg-emerald-950/60 text-emerald-400 border border-emerald-800/50 flex items-center justify-center font-bold text-sm"
+                                                >
+                                                  {hNo}
+                                                </span>
+                                              ),
+                                            )}
+                                          </div>
+                                        </div>
+
+                                        {/* TJK Pool Size details */}
+                                        <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-800/80 flex items-center justify-between flex-wrap gap-3">
+                                          <div>
+                                            <span className="text-xs font-bold text-slate-400 block">
+                                              TJK Toplam Dağıtılacak Tutar
+                                              (Tevzi)
+                                            </span>
+                                            <span className="text-[10.5px] text-slate-500 font-medium block">
+                                              {analysis.isDefaultPool
+                                                ? "⏱ Koşular tamamlanmadığı için sonuç bekleniyor. (Tahmini havuz kullanılmıştır)"
+                                                : "✓ TJK resmi sonuçlarından çekilen gerçek tevzi tutarı."}
+                                            </span>
+                                          </div>
+                                          <span
+                                            className={`text-base font-extrabold px-3 py-1 rounded-xl border ${
+                                              analysis.isDefaultPool
+                                                ? "text-amber-400 bg-amber-950/20 border-amber-900/30"
+                                                : "text-emerald-400 bg-emerald-950/20 border-emerald-900/30"
+                                            }`}
+                                          >
+                                            {analysis.poolSize.toLocaleString(
+                                              "tr-TR",
+                                            )}{" "}
+                                            ₺
+                                          </span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })()
                                 )}
                               </div>
-                            ))}
+                            );
+                          })()}
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })()}
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
         {/* Program View */}
         {view === "program" && renderProgram()}

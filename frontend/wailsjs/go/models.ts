@@ -169,6 +169,7 @@ export namespace main {
 	    city: string;
 	    date: string;
 	    races: Race[];
+	    tevzi: Record<string, string>;
 	
 	    static createFrom(source: any = {}) {
 	        return new RaceProgram(source);
@@ -179,6 +180,7 @@ export namespace main {
 	        this.city = source["city"];
 	        this.date = source["date"];
 	        this.races = this.convertValues(source["races"], Race);
+	        this.tevzi = source["tevzi"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

@@ -19,6 +19,7 @@ func NewApp() *App {
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	StartResultsWorker(ctx)
 }
 
 // Greet returns a greeting for the given name
@@ -61,5 +62,10 @@ func (a *App) GetProgramSilks(city, date string) (map[int]map[string]string, err
 // GetGanyanTypes fetches Pick 6 types for a specific city and date
 func (a *App) GetGanyanTypes(city, date string) ([]GanyanInfo, error) {
 	return GetGanyanTypes(city, date)
+}
+
+// ForceCheckResults triggers the background results checker instantly
+func (a *App) ForceCheckResults() {
+	checkAndUpdateResults(a.ctx)
 }
 
