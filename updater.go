@@ -27,6 +27,7 @@ type UpdateResult struct {
 func (a *App) CheckForUpdate() UpdateResult {
 	latest, found, err := detectLatest()
 	if err != nil {
+		fmt.Printf("Error detecting latest release: %v\n", err)
 		return UpdateResult{
 			UpdateAvailable: false,
 			CurrentVersion:  version,
@@ -35,12 +36,15 @@ func (a *App) CheckForUpdate() UpdateResult {
 	}
 
 	if !found {
+		fmt.Printf("No published release found\n")
 		return UpdateResult{
 			UpdateAvailable: false,
 			CurrentVersion:  version,
 			Message:         "Henüz yayınlanmış bir release bulunamadı.",
 		}
 	}
+
+	fmt.Printf("Latest version: %s, Found: %v\n", latest.Version(), found)
 
 	if latest.LessOrEqual(version) {
 		return UpdateResult{
