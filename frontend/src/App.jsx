@@ -210,6 +210,7 @@ function App() {
   const [activeCalcCards, setActiveCalcCards] = useState({}); // { [predictionId]: boolean }
   const [poolSizes, setPoolSizes] = useState({}); // { [predictionId]: number }
   const [checkingResults, setCheckingResults] = useState(false);
+  const [neVerirSelections, setNeVerirSelections] = useState({}); // { [predictionId]: [h1, h2, h3, h4, h5, h6] }
 
   const handleForceCheckResults = () => {
     setCheckingResults(true);
@@ -245,7 +246,7 @@ function App() {
       });
   };
 
-  const getCardAnalysis = (p, mode) => {
+  const getCardAnalysis = (p, mode, selectedHorses = null) => {
     const pDate = p.date.split("T")[0];
     const cityProg = calculatorPrograms[pDate]?.find(
       (cp) => cp.city === p.city,
@@ -264,16 +265,19 @@ function App() {
       }
     }
 
+    if (
+      !selectedHorses ||
+      selectedHorses.some((h) => h === null || h === undefined)
+    ) {
+      return { status: "no_selections", poolSize, isDefaultPool, cityProg };
+    }
+
     const firstHorses = [];
     const legsAGF = [];
-    for (const leg of p.legs) {
-      const activeHorses = getLegPredictions(leg.predictions, mode);
-      if (activeHorses.length === 0) {
-        return { status: "invalid_legs" };
-      }
-
-      const firstHorse = activeHorses[0];
-      firstHorses.push(firstHorse);
+    for (let i = 0; i < p.legs.length; i++) {
+      const leg = p.legs[i];
+      const selectedHorseNo = selectedHorses[i];
+      firstHorses.push(selectedHorseNo);
 
       const race = cityProg.races?.find((r, idx) => {
         const nameMatch = r.race_name.match(/(\d+)\./);
@@ -286,7 +290,7 @@ function App() {
       }
 
       const horse = race.horses.find(
-        (h) => parseInt(h.horse_no, 10) === firstHorse,
+        (h) => parseInt(h.horse_no, 10) === selectedHorseNo,
       );
       if (horse) {
         const agfPercent = parseAGFPercentage(horse.agf);
@@ -320,6 +324,7 @@ function App() {
       firstHorses: firstHorses,
       poolSize: poolSize,
       isDefaultPool: isDefaultPool,
+      cityProg: cityProg,
     };
   };
 
@@ -1594,7 +1599,7 @@ function App() {
                         {hasSlash ? (
                           <div className="text-sm font-bold leading-tight mt-0.5 space-y-0.5">
                             <div>
-                              Normal Paket:{" "}
+                              Normal Kupon:{" "}
                               <span className="font-extrabold text-emerald-700">
                                 {costNormal.toLocaleString("tr-TR", {
                                   minimumFractionDigits: 2,
@@ -1603,7 +1608,7 @@ function App() {
                               </span>
                             </div>
                             <div>
-                              Geniş Paket:{" "}
+                              Geniş Kupon:{" "}
                               <span className="font-extrabold text-indigo-700">
                                 {costGenis.toLocaleString("tr-TR", {
                                   minimumFractionDigits: 2,
@@ -2185,7 +2190,7 @@ function App() {
                             if (!isExpanded) return null;
 
                             return (
-                              <div className="mt-6 pt-6 border-t border-gray-100 animate-in fade-in slide-in-from-top-4 duration-300">
+                              <div className="mt-6 pt-6 border-t border-gray-100 animate-in fade-in slide-in-from-top-4 duration-500">
                                 {loadingCalcProgram[pDate] ? (
                                   <div className="flex items-center justify-center gap-3 py-6 text-slate-500 font-medium bg-slate-50 rounded-2xl border border-slate-100">
                                     <div className="w-5 h-5 rounded-full border-2 border-slate-300 border-t-emerald-500 animate-spin" />
@@ -2196,9 +2201,13 @@ function App() {
                                   </div>
                                 ) : (
                                   (() => {
+                                    const selections = neVerirSelections[
+                                      p.id
+                                    ] || [null, null, null, null, null, null];
                                     const analysis = getCardAnalysis(
                                       p,
                                       activeMode,
+                                      selections,
                                     );
 
                                     if (analysis.status === "no_program") {
@@ -2220,78 +2229,198 @@ function App() {
                                       );
                                     }
 
+                                    const cityProg = analysis.cityProg;
+
                                     return (
                                       <div className="bg-slate-900 text-slate-100 rounded-3xl p-6 shadow-inner space-y-6">
                                         {/* Header: Panel Title */}
                                         <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                                           <h4 className="font-extrabold text-sm uppercase tracking-wider text-emerald-400 flex items-center gap-2">
-                                            📊 İlk Tercih İkramiye Beklentisi
-                                            (AGF Analizi)
+                                            📊 Ne Verir? (Canlı AGF & İkramiye
+                                            Hesaplama)
                                           </h4>
                                           <span className="bg-slate-800 text-slate-300 px-2.5 py-1 rounded-lg text-xs font-bold border border-slate-700 select-none">
-                                            İlk Tercih Kombinasyonu
+                                            Özel Kombinasyon Analizi
                                           </span>
                                         </div>
 
-                                        {/* Portfolio Metrics Grid */}
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                          {/* Kazanma Olasılığı */}
-                                          <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-800/80">
-                                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">
-                                              Kombinasyon Kazanma İhtimali
-                                            </span>
-                                            <span className="text-2xl font-black text-emerald-400">
-                                              %{" "}
-                                              {analysis.totalWinProb.toLocaleString(
-                                                "tr-TR",
-                                                { maximumFractionDigits: 6 },
-                                              )}
-                                            </span>
-                                          </div>
+                                        {/* Dynamic Horse Selectors for all 6 legs */}
+                                        <div className="space-y-3">
+                                          <span className="text-xs font-bold text-slate-400 block mb-1">
+                                            🐎 Her Ayak İçin Analiz Etmek
+                                            İstediğiniz Atı Seçin:
+                                          </span>
+                                          <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+                                            {p.legs &&
+                                              p.legs.map((leg, legIdx) => {
+                                                const race =
+                                                  cityProg?.races?.find(
+                                                    (r, idx) => {
+                                                      const nameMatch =
+                                                        r.race_name.match(
+                                                          /(\d+)\./,
+                                                        );
+                                                      const rNo = nameMatch
+                                                        ? parseInt(
+                                                            nameMatch[1],
+                                                            10,
+                                                          )
+                                                        : idx + 1;
+                                                      return (
+                                                        rNo === leg.leg_number
+                                                      );
+                                                    },
+                                                  );
 
-                                          {/* Tahmini Ödeme */}
-                                          <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-800/80">
-                                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">
-                                              Tahmini İkramiye Ödemesi (6'lı
-                                              Ganyan)
-                                            </span>
-                                            <span className="text-2xl font-black text-indigo-400">
-                                              {analysis.expectedPayout.toLocaleString(
-                                                "tr-TR",
-                                                {
-                                                  minimumFractionDigits: 2,
-                                                  maximumFractionDigits: 2,
-                                                },
-                                              )}{" "}
-                                              ₺
-                                            </span>
+                                                const horsesList =
+                                                  race?.horses || [];
+
+                                                return (
+                                                  <div
+                                                    key={legIdx}
+                                                    className="bg-slate-950/40 p-2.5 rounded-2xl border border-slate-800/80 flex flex-col gap-1.5 focus-within:ring-2 focus-within:ring-emerald-500/30 transition-all"
+                                                  >
+                                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">
+                                                      {p.ganyan_legs
+                                                        ? `${leg.leg_number}. Koşu`
+                                                        : `${leg.leg_number}. Ayak`}
+                                                    </span>
+                                                    <select
+                                                      value={
+                                                        selections[legIdx] ===
+                                                        null
+                                                          ? ""
+                                                          : selections[legIdx]
+                                                      }
+                                                      onChange={(e) => {
+                                                        const val =
+                                                          e.target.value === ""
+                                                            ? null
+                                                            : parseInt(
+                                                                e.target.value,
+                                                                10,
+                                                              );
+                                                        setNeVerirSelections(
+                                                          (prev) => {
+                                                            const curr = prev[
+                                                              p.id
+                                                            ]
+                                                              ? [...prev[p.id]]
+                                                              : [
+                                                                  null,
+                                                                  null,
+                                                                  null,
+                                                                  null,
+                                                                  null,
+                                                                  null,
+                                                                ];
+                                                            curr[legIdx] = val;
+                                                            return {
+                                                              ...prev,
+                                                              [p.id]: curr,
+                                                            };
+                                                          },
+                                                        );
+                                                      }}
+                                                      className="bg-slate-800 border border-slate-700 text-slate-100 rounded-xl px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-emerald-500 w-full font-bold cursor-pointer hover:bg-slate-700/80 transition-colors"
+                                                    >
+                                                      <option value="">
+                                                        At Seçin...
+                                                      </option>
+                                                      {horsesList.map(
+                                                        (horse) => (
+                                                          <option
+                                                            key={horse.horse_no}
+                                                            value={
+                                                              horse.horse_no
+                                                            }
+                                                          >
+                                                            {horse.horse_no} -{" "}
+                                                            {horse.name} (
+                                                            {horse.agf || "%0"})
+                                                          </option>
+                                                        ),
+                                                      )}
+                                                    </select>
+                                                  </div>
+                                                );
+                                              })}
                                           </div>
                                         </div>
 
-                                        {/* Birinci Atlar Kombinasyonu */}
-                                        <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800 flex items-center justify-between flex-wrap gap-2">
-                                          <div>
-                                            <span className="text-xs font-bold text-slate-400 block">
-                                              Birinci Tercihler
-                                            </span>
-                                            <span className="text-xs text-slate-500 font-medium">
-                                              Ayaklardaki ilk atların
-                                              kombinasyonu.
-                                            </span>
+                                        {/* Expected metrics display */}
+                                        {analysis.status === "no_selections" ? (
+                                          <div className="bg-slate-950/50 border border-dashed border-slate-800 rounded-2xl p-6 text-center text-slate-400 font-medium text-xs select-none">
+                                            ℹ️ Kazanma ihtimali ve ikramiye
+                                            beklentisini hesaplamak için lütfen
+                                            yukarıdaki tüm koşulardan birer at
+                                            seçin.
                                           </div>
-                                          <div className="flex gap-2">
-                                            {analysis.firstHorses.map(
-                                              (hNo, idx) => (
-                                                <span
-                                                  key={idx}
-                                                  className="w-8 h-8 rounded-full bg-emerald-950/60 text-emerald-400 border border-emerald-800/50 flex items-center justify-center font-bold text-sm"
-                                                >
-                                                  {hNo}
+                                        ) : (
+                                          <div className="space-y-6 animate-in fade-in duration-300">
+                                            {/* Portfolio Metrics Grid */}
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                              {/* Kazanma Olasılığı */}
+                                              <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-800/80">
+                                                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">
+                                                  Kombinasyon Kazanma İhtimali
                                                 </span>
-                                              ),
-                                            )}
+                                                <span className="text-2xl font-black text-emerald-400">
+                                                  %{" "}
+                                                  {analysis.totalWinProb.toLocaleString(
+                                                    "tr-TR",
+                                                    {
+                                                      maximumFractionDigits: 6,
+                                                    },
+                                                  )}
+                                                </span>
+                                              </div>
+
+                                              {/* Tahmini Ödeme */}
+                                              <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-800/80">
+                                                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">
+                                                  Tahmini İkramiye Ödemesi (6'lı
+                                                  Ganyan)
+                                                </span>
+                                                <span className="text-2xl font-black text-indigo-400">
+                                                  {analysis.expectedPayout.toLocaleString(
+                                                    "tr-TR",
+                                                    {
+                                                      minimumFractionDigits: 2,
+                                                      maximumFractionDigits: 2,
+                                                    },
+                                                  )}{" "}
+                                                  ₺
+                                                </span>
+                                              </div>
+                                            </div>
+
+                                            {/* Seçilen Atlar Kombinasyonu */}
+                                            <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800 flex items-center justify-between flex-wrap gap-2">
+                                              <div>
+                                                <span className="text-xs font-bold text-slate-400 block">
+                                                  Seçilen Kombinasyon
+                                                </span>
+                                                <span className="text-xs text-slate-500 font-medium">
+                                                  Hesaplamaya dahil edilen at
+                                                  numaraları.
+                                                </span>
+                                              </div>
+                                              <div className="flex gap-2">
+                                                {analysis.firstHorses.map(
+                                                  (hNo, idx) => (
+                                                    <span
+                                                      key={idx}
+                                                      className="w-8 h-8 rounded-full bg-emerald-950/60 text-emerald-400 border border-emerald-800/50 flex items-center justify-center font-bold text-sm"
+                                                    >
+                                                      {hNo}
+                                                    </span>
+                                                  ),
+                                                )}
+                                              </div>
+                                            </div>
                                           </div>
-                                        </div>
+                                        )}
 
                                         {/* TJK Pool Size details */}
                                         <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-800/80 flex items-center justify-between flex-wrap gap-3">
