@@ -93,13 +93,40 @@ function renderPerformance(last6) {
   );
 }
 
-function calculatePredictionCost(legsState) {
+function calculatePredictionCost(legsState, packageType = "genis") {
   let product = 1;
   let hasHorses = false;
 
   for (const leg of legsState) {
     if (!leg || !leg.predictions) return 0;
-    const horseCount = leg.predictions
+    
+    let predictionsStr = "";
+    if (typeof leg.predictions === "string") {
+      predictionsStr = leg.predictions;
+    } else if (Array.isArray(leg.predictions)) {
+      const hasZero = leg.predictions.includes(0);
+      if (hasZero) {
+        const zeroIndex = leg.predictions.indexOf(0);
+        if (packageType === "normal") {
+          predictionsStr = leg.predictions.slice(0, zeroIndex).join(",");
+        } else {
+          predictionsStr = leg.predictions.filter(n => n !== 0).join(",");
+        }
+      } else {
+        predictionsStr = leg.predictions.join(",");
+      }
+    }
+
+    if (predictionsStr.includes("/")) {
+      const parts = predictionsStr.split("/");
+      if (packageType === "normal") {
+        predictionsStr = parts[0];
+      } else {
+        predictionsStr = parts.join(",");
+      }
+    }
+
+    const horseCount = predictionsStr
       .split(",")
       .map((s) => s.trim())
       .filter((s) => s !== "" && !isNaN(parseInt(s, 10))).length;
@@ -118,6 +145,23 @@ function calculatePredictionCost(legsState) {
 function App() {
   const [view, setView] = useState("list"); // 'list' | 'form' | 'program'
   const [predictions, setPredictions] = useState([]);
+  const [showPast, setShowPast] = useState(false);
+  const [selectedCities, setSelectedCities] = useState([]);
+  const [cardModes, setCardModes] = useState({}); // { [predictionId]: 'normal' | 'genis' }
+
+  const getLegPredictions = (predictionsArray, mode) => {
+    if (!predictionsArray) return [];
+    const hasZero = predictionsArray.includes(0);
+    if (hasZero) {
+      const zeroIndex = predictionsArray.indexOf(0);
+      if (mode === "normal") {
+        return predictionsArray.slice(0, zeroIndex);
+      } else {
+        return predictionsArray.filter(n => n !== 0);
+      }
+    }
+    return predictionsArray;
+  };
 
   // Update state
   const [updateInfo, setUpdateInfo] = useState(null);
@@ -287,7 +331,7 @@ function App() {
 
   function handleLegChange(index, value) {
     const newLegs = [...legs];
-    const val = value.replace(/[^0-9, ]/g, "");
+    const val = value.replace(/[^0-9, /]/g, "");
     newLegs[index].predictions = val;
     setLegs(newLegs);
   }
@@ -296,10 +340,25 @@ function App() {
     e.preventDefault();
 
     const parsedLegs = legs.map((leg, i) => {
-      const arr = leg.predictions
-        .split(",")
-        .map((s) => parseInt(s.trim(), 10))
-        .filter((n) => !isNaN(n));
+      const predictionsStr = leg.predictions;
+      let arr = [];
+      if (predictionsStr.includes("/")) {
+        const parts = predictionsStr.split("/");
+        const before = parts[0]
+          .split(",")
+          .map((s) => parseInt(s.trim(), 10))
+          .filter((n) => !isNaN(n));
+        const after = parts[1]
+          .split(",")
+          .map((s) => parseInt(s.trim(), 10))
+          .filter((n) => !isNaN(n));
+        arr = [...before, 0, ...after];
+      } else {
+        arr = predictionsStr
+          .split(",")
+          .map((s) => parseInt(s.trim(), 10))
+          .filter((n) => !isNaN(n));
+      }
 
       const actualRaceNo =
         selectedGanyanType && selectedGanyanType.races
@@ -313,7 +372,7 @@ function App() {
       };
     });
 
-    const cost = calculatePredictionCost(legs);
+    const cost = calculatePredictionCost(legs, "genis");
 
     const p = {
       date: date,
@@ -357,23 +416,35 @@ function App() {
     setEditDate(p.date ? p.date.split("T")[0] : "");
     setEditCity(p.city);
     setEditIsCompleted(p.is_completed);
-    // Convert legs predictions arrays to comma-separated strings
+    // Convert legs predictions arrays to comma-separated strings (formatting separator '0' as '/')
     setEditLegs(
-      (p.legs || []).map((leg) => ({
-        leg_number: leg.leg_number,
-        predictions: (leg.predictions || []).join(", "),
-        winner_horse: leg.winner_horse || 0,
-      })),
+      (p.legs || []).map((leg) => {
+        let predictionsStr = "";
+        const hasZero = leg.predictions && leg.predictions.includes(0);
+        if (hasZero) {
+          const zeroIndex = leg.predictions.indexOf(0);
+          const before = leg.predictions.slice(0, zeroIndex).join(", ");
+          const after = leg.predictions.slice(zeroIndex + 1).join(", ");
+          predictionsStr = `${before} / ${after}`;
+        } else {
+          predictionsStr = (leg.predictions || []).join(", ");
+        }
+        return {
+          leg_number: leg.leg_number,
+          predictions: predictionsStr,
+          winner_horse: leg.winner_horse || 0,
+        };
+      }),
     );
   }
 
-  function cancelEditing() {
+  const cancelEditing = () => {
     setEditingPrediction(null);
-  }
+  };
 
   function handleEditLegChange(index, value) {
     const newLegs = [...editLegs];
-    const val = value.replace(/[^0-9, ]/g, "");
+    const val = value.replace(/[^0-9, /]/g, "");
     newLegs[index].predictions = val;
     setEditLegs(newLegs);
   }
@@ -386,10 +457,25 @@ function App() {
 
   function handleEditSave() {
     const parsedLegs = editLegs.map((leg) => {
-      const arr = leg.predictions
-        .split(",")
-        .map((s) => parseInt(s.trim(), 10))
-        .filter((n) => !isNaN(n));
+      const predictionsStr = leg.predictions;
+      let arr = [];
+      if (predictionsStr.includes("/")) {
+        const parts = predictionsStr.split("/");
+        const before = parts[0]
+          .split(",")
+          .map((s) => parseInt(s.trim(), 10))
+          .filter((n) => !isNaN(n));
+        const after = parts[1]
+          .split(",")
+          .map((s) => parseInt(s.trim(), 10))
+          .filter((n) => !isNaN(n));
+        arr = [...before, 0, ...after];
+      } else {
+        arr = predictionsStr
+          .split(",")
+          .map((s) => parseInt(s.trim(), 10))
+          .filter((n) => !isNaN(n));
+      }
       return {
         leg_number: leg.leg_number,
         predictions: arr,
@@ -397,7 +483,7 @@ function App() {
       };
     });
 
-    const cost = calculatePredictionCost(editLegs);
+    const cost = calculatePredictionCost(editLegs, "genis");
 
     const updated = {
       id: editingPrediction.id,
@@ -853,7 +939,10 @@ function App() {
 
           <div className="p-6 border-t border-gray-100 flex flex-col sm:flex-row gap-4 items-center justify-between">
             {(() => {
-              const currentCost = calculatePredictionCost(editLegs);
+              const costNormal = calculatePredictionCost(editLegs, "normal");
+              const costGenis = calculatePredictionCost(editLegs, "genis");
+              const hasSlash = editLegs.some(l => l.predictions.includes("/"));
+              
               return (
                 <div className="flex items-center gap-2.5 bg-emerald-50 text-emerald-800 px-4 py-2 rounded-xl border border-emerald-100 select-none">
                   <svg
@@ -873,13 +962,19 @@ function App() {
                     <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wide block leading-none">
                       Güncel Tutar
                     </span>
-                    <span className="font-extrabold text-sm leading-tight">
-                      {currentCost.toLocaleString("tr-TR", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}{" "}
-                      TL
-                    </span>
+                    {hasSlash ? (
+                      <span className="font-bold text-xs leading-normal block mt-0.5">
+                        Norm: <span className="font-extrabold text-emerald-700">{costNormal.toLocaleString("tr-TR", { minimumFractionDigits: 2 })} ₺</span> | Gen: <span className="font-extrabold text-indigo-700">{costGenis.toLocaleString("tr-TR", { minimumFractionDigits: 2 })} ₺</span>
+                      </span>
+                    ) : (
+                      <span className="font-extrabold text-sm leading-tight">
+                        {costGenis.toLocaleString("tr-TR", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}{" "}
+                        ₺
+                      </span>
+                    )}
                   </div>
                 </div>
               );
@@ -1247,12 +1342,15 @@ function App() {
               </div>
 
               {(() => {
-                const currentCost = calculatePredictionCost(legs);
+                const costNormal = calculatePredictionCost(legs, "normal");
+                const costGenis = calculatePredictionCost(legs, "genis");
+                const hasSlash = legs.some(l => l.predictions.includes("/"));
+                
                 return (
                   <div className="mt-10 flex flex-col md:flex-row items-center justify-between border-t border-gray-100 pt-6 gap-4">
                     <div className="flex items-center gap-3 bg-emerald-50 text-emerald-800 px-6 py-3.5 rounded-2xl border border-emerald-100 shadow-sm select-none">
                       <svg
-                        className="w-6 h-6 text-emerald-600 animate-bounce"
+                        className="w-6 h-6 text-emerald-600"
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"
@@ -1268,13 +1366,24 @@ function App() {
                         <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 leading-none">
                           Tahmini Kupon Tutarı
                         </div>
-                        <div className="text-2xl font-black leading-tight mt-0.5">
-                          {currentCost.toLocaleString("tr-TR", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}{" "}
-                          TL
-                        </div>
+                        {hasSlash ? (
+                          <div className="text-sm font-bold leading-tight mt-0.5 space-y-0.5">
+                            <div>
+                              Normal Paket: <span className="font-extrabold text-emerald-700">{costNormal.toLocaleString("tr-TR", { minimumFractionDigits: 2 })} ₺</span>
+                            </div>
+                            <div>
+                              Geniş Paket: <span className="font-extrabold text-indigo-700">{costGenis.toLocaleString("tr-TR", { minimumFractionDigits: 2 })} ₺</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-2xl font-black leading-tight mt-0.5">
+                            {costGenis.toLocaleString("tr-TR", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}{" "}
+                            ₺
+                          </div>
+                        )}
                       </div>
                     </div>
                     <button
@@ -1291,95 +1400,215 @@ function App() {
         )}
 
         {/* List View */}
-        {view === "list" && (
-          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {predictions.length === 0 ? (
-              <div className="text-center py-24 bg-white rounded-3xl border border-gray-100 shadow-sm">
-                <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <svg
-                    className="w-10 h-10 text-gray-300"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                    />
-                  </svg>
-                </div>
-                <p className="text-xl text-gray-600 font-medium">
-                  Henüz kayıtlı bir tahmin yok
-                </p>
-                <button
-                  onClick={() => setView("form")}
-                  className="mt-4 text-emerald-600 font-bold hover:underline"
-                >
-                  İlk veriyi ekleyerek başla
-                </button>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 gap-6">
-                {predictions.map((p) => (
-                  <div
-                    key={p.id}
-                    className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm hover:shadow-lg transition-shadow relative overflow-hidden group"
-                  >
-                    <div className="absolute top-0 left-0 w-2 h-full bg-emerald-500"></div>
+        {view === "list" && (() => {
+          const today = new Date();
+          const yyyy = today.getFullYear();
+          const mm = String(today.getMonth() + 1).padStart(2, '0');
+          const dd = String(today.getDate()).padStart(2, '0');
+          const todayStr = `${yyyy}-${mm}-${dd}`;
 
-                    {/* Action buttons */}
-                    <div className="absolute top-6 right-6 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => startEditing(p)}
-                        className="text-gray-400 hover:text-emerald-600 bg-gray-50 hover:bg-emerald-50 p-2 rounded-full transition-colors"
-                        title="Düzenle"
-                      >
-                        <svg
-                          className="w-5 h-5"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                          />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={() => handleDelete(p.id)}
-                        className="text-gray-400 hover:text-red-500 bg-gray-50 hover:bg-red-50 p-2 rounded-full transition-colors"
-                        title="Sil"
-                      >
-                        <svg
-                          className="w-5 h-5"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                          />
-                        </svg>
-                      </button>
+          const uniqueCities = [...new Set(predictions.map((p) => p.city).filter(Boolean))].sort();
+
+          const toggleCityFilter = (city) => {
+            if (selectedCities.includes(city)) {
+              setSelectedCities(selectedCities.filter((c) => c !== city));
+            } else {
+              setSelectedCities([...selectedCities, city]);
+            }
+          };
+
+          const displayedPredictions = predictions.filter((p) => {
+            const isPast = p.date && p.date.split("T")[0] < todayStr;
+            const matchesPastFilter = showPast ? true : !isPast;
+            const matchesCityFilter = selectedCities.length === 0 ? true : selectedCities.includes(p.city);
+            return matchesPastFilter && matchesCityFilter;
+          });
+
+          return (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              {predictions.length > 0 && (
+                <div className="bg-white border border-gray-100 p-5 rounded-3xl shadow-sm space-y-4">
+                  {/* Top Bar: Count & Filters */}
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pb-4 border-b border-gray-100/70">
+                    <div className="text-slate-600 text-sm font-medium">
+                      Toplam <span className="font-bold text-slate-800">{predictions.length}</span> tahminden{" "}
+                      <span className="font-bold text-emerald-700">{displayedPredictions.length}</span> tanesi gösteriliyor.
                     </div>
+                    <div className="flex flex-wrap items-center gap-4">
+                      {/* Past Toggle */}
+                      <label className="flex items-center gap-3 cursor-pointer select-none group">
+                        <div className="relative">
+                          <input
+                            type="checkbox"
+                            checked={showPast}
+                            onChange={(e) => setShowPast(e.target.checked)}
+                            className="sr-only"
+                          />
+                          <div
+                            className={`w-11 h-6 rounded-full transition-all duration-300 ${
+                              showPast ? "bg-emerald-600 shadow-md" : "bg-gray-200"
+                            }`}
+                          />
+                          <div
+                            className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-all duration-300 ${
+                              showPast ? "translate-x-5" : "translate-x-0"
+                            }`}
+                          />
+                        </div>
+                        <span className="text-sm font-bold text-slate-700 group-hover:text-slate-900 transition-colors">
+                          Geçmiş Tahminleri Göster
+                        </span>
+                      </label>
+                    </div>
+                  </div>
 
-                    <div className="flex flex-col md:flex-row md:items-center gap-4 mb-6 pr-24 pl-4">
-                      <div>
-                        <h3 className="text-2xl font-extrabold text-gray-800">
-                          {p.city}
-                        </h3>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-md text-sm font-semibold flex items-center gap-1">
+                  {/* City Filters */}
+                  {uniqueCities.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider mr-2">Şehir Filtresi:</span>
+                      <button
+                        onClick={() => setSelectedCities([])}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                          selectedCities.length === 0
+                            ? "bg-slate-800 text-white shadow-sm"
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        }`}
+                      >
+                        Tümü
+                      </button>
+                      {uniqueCities.map((city) => {
+                        const isActive = selectedCities.includes(city);
+                        return (
+                          <button
+                            key={city}
+                            onClick={() => toggleCityFilter(city)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                              isActive
+                                ? "bg-emerald-600 text-white shadow-sm"
+                                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                            }`}
+                          >
+                            {isActive && (
+                              <svg className="w-3 h-3 stroke-[3]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                              </svg>
+                            )}
+                            {city}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {predictions.length === 0 ? (
+                <div className="text-center py-24 bg-white rounded-3xl border border-gray-100 shadow-sm">
+                  <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <svg
+                      className="w-10 h-10 text-gray-300"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                      />
+                    </svg>
+                  </div>
+                  <p className="text-xl text-gray-600 font-medium">
+                    Henüz kayıtlı bir tahmin yok
+                  </p>
+                  <button
+                    onClick={() => setView("form")}
+                    className="mt-4 text-emerald-600 font-bold hover:underline"
+                  >
+                    İlk veriyi ekleyerek başla
+                  </button>
+                </div>
+              ) : displayedPredictions.length === 0 ? (() => {
+                const hasCityFilter = selectedCities.length > 0;
+                const hasPastFilter = !showPast;
+                
+                return (
+                  <div className="text-center py-20 bg-white rounded-3xl border border-gray-100 shadow-sm animate-in fade-in duration-300">
+                    <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <svg
+                        className="w-10 h-10 text-emerald-600"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                        />
+                      </svg>
+                    </div>
+                    <p className="text-xl text-gray-600 font-semibold px-4">
+                      Kriterlere uygun tahmin bulunamadı.
+                    </p>
+                    <p className="text-gray-400 text-sm mt-1.5 px-4 font-medium">
+                      {hasPastFilter && hasCityFilter 
+                        ? "Seçilen şehirlerde güncel tahmin bulunmuyor. Şehir filtrelerini temizleyebilir veya geçmiş tahminleri göstermeyi deneyebilirsiniz."
+                        : hasCityFilter 
+                        ? "Seçilen şehirlerde kriterlerinize uygun tahmin bulunmuyor. Şehir filtrelerini temizlemeyi deneyebilirsiniz."
+                        : "Güncel tahmininiz bulunmuyor. Geçmiş tahminleri göstermeyi deneyebilirsiniz."}
+                    </p>
+                    <div className="mt-6 flex flex-wrap justify-center gap-3">
+                      {hasCityFilter && (
+                        <button
+                          onClick={() => setSelectedCities([])}
+                          className="px-5 py-2.5 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 transition shadow-sm"
+                        >
+                          Filtreleri Temizle
+                        </button>
+                      )}
+                      {hasPastFilter && (
+                        <button
+                          onClick={() => setShowPast(true)}
+                          className="px-5 py-2.5 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 transition shadow-sm"
+                        >
+                          Geçmiş Tahminleri Göster
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })() : (
+                <div className="grid grid-cols-1 gap-6">
+                  {displayedPredictions.map((p) => {
+                    const isPast = p.date && p.date.split("T")[0] < todayStr;
+                    const hasSlashInCard = p.legs && p.legs.some(leg => leg.predictions && leg.predictions.includes(0));
+                    const activeMode = cardModes[p.id] || "normal";
+                    
+                    return (
+                      <div
+                        key={p.id}
+                        className={`bg-white border border-gray-100 rounded-3xl p-6 shadow-sm hover:shadow-lg transition-all relative overflow-hidden group ${
+                          isPast ? "opacity-60 grayscale-[10%]" : ""
+                        }`}
+                      >
+                        <div
+                          className={`absolute top-0 left-0 w-2 h-full ${
+                            isPast ? "bg-slate-300" : "bg-emerald-500"
+                          }`}
+                        />
+
+                        {/* Action buttons */}
+                        <div className="absolute top-6 right-6 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => startEditing(p)}
+                            className="text-gray-400 hover:text-emerald-600 bg-gray-50 hover:bg-emerald-50 p-2 rounded-full transition-colors"
+                            title="Düzenle"
+                          >
                             <svg
-                              className="w-4 h-4"
+                              className="w-5 h-5"
                               fill="none"
                               stroke="currentColor"
                               viewBox="0 0 24 24"
@@ -1388,96 +1617,175 @@ function App() {
                                 strokeLinecap="round"
                                 strokeLinejoin="round"
                                 strokeWidth={2}
-                                d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
                               />
                             </svg>
-                            {p.date.split("T")[0]}
-                          </span>
-                          {p.ganyan_name && (
-                            <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-md text-sm font-extrabold border border-emerald-100 shadow-sm flex items-center gap-1">
-                              <svg
-                                className="w-3.5 h-3.5 stroke-[2.5]"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
+                          </button>
+                          <button
+                            onClick={() => handleDelete(p.id)}
+                            className="text-gray-400 hover:text-red-500 bg-gray-50 hover:bg-red-50 p-2 rounded-full transition-colors"
+                            title="Sil"
+                          >
+                            <svg
+                              className="w-5 h-5"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                              />
+                            </svg>
+                          </button>
+                        </div>
+
+                        <div className="flex flex-col md:flex-row md:items-center gap-4 mb-6 pr-24 pl-4">
+                          <div>
+                            <h3 className="text-2xl font-extrabold text-gray-800">
+                              {p.city}
+                            </h3>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-md text-sm font-semibold flex items-center gap-1">
+                                <svg
+                                  className="w-4 h-4"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                                  />
+                                </svg>
+                                {p.date.split("T")[0].split("-").reverse().join("-")}
+                              </span>
+                              {isPast && (
+                                <span className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded text-xs font-bold border border-slate-200/60 flex items-center gap-1 uppercase tracking-wider select-none">
+                                  ⏱ Geçmiş
+                                </span>
+                              )}
+                              {p.ganyan_name && (
+                                <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-md text-sm font-extrabold border border-emerald-100 shadow-sm flex items-center gap-1">
+                                  <svg
+                                    className="w-3.5 h-3.5 stroke-[2.5]"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      d="M13 10V3L4 14h7v7l9-11h-7z"
+                                    />
+                                  </svg>
+                                  {p.ganyan_name} ({p.ganyan_legs})
+                                </span>
+                              )}
+                              {(() => {
+                                const dynamicCost = calculatePredictionCost(p.legs, activeMode);
+                                if (dynamicCost <= 0) return null;
+                                return (
+                                  <span className={`px-3 py-1 rounded-md text-sm font-black shadow-sm flex items-center gap-1 border transition-colors duration-300 ${
+                                    activeMode === "normal" 
+                                      ? "bg-emerald-50 text-emerald-700 border-emerald-100" 
+                                      : "bg-indigo-50 text-indigo-700 border-indigo-100"
+                                  }`}>
+                                    {dynamicCost.toLocaleString("tr-TR", {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    })}{" "}
+                                    ₺
+                                  </span>
+                                );
+                              })()}
+                            </div>
+                          </div>
+
+                          {/* Card specific mode switcher */}
+                          {hasSlashInCard && (
+                            <div className="flex bg-slate-100 p-0.5 rounded-xl border border-slate-200/50 shadow-inner md:ml-4 select-none animate-in fade-in duration-300">
+                              <button
+                                onClick={() => setCardModes(prev => ({ ...prev, [p.id]: "normal" }))}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                  activeMode === "normal"
+                                    ? "bg-white text-emerald-700 shadow-sm"
+                                    : "text-slate-500 hover:text-slate-800"
+                                }`}
                               >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  d="M13 10V3L4 14h7v7l9-11h-7z"
-                                />
-                              </svg>
-                              {p.ganyan_name} ({p.ganyan_legs})
-                            </span>
-                          )}
-                          {p.ganyan_cost > 0 && (
-                            <span className="bg-blue-50 text-blue-700 px-3 py-1 rounded-md text-sm font-black border border-blue-100 shadow-sm flex items-center gap-1">
-                              <svg
-                                className="w-4 h-4 text-blue-600"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
+                                Normal
+                              </button>
+                              <button
+                                onClick={() => setCardModes(prev => ({ ...prev, [p.id]: "genis" }))}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                  activeMode === "genis"
+                                    ? "bg-white text-indigo-700 shadow-sm"
+                                    : "text-slate-500 hover:text-slate-800"
+                                }`}
                               >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth={2}
-                                  d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                                />
-                              </svg>
-                              {p.ganyan_cost.toLocaleString("tr-TR", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
-                              })}{" "}
-                              TL
-                            </span>
+                                Geniş
+                              </button>
+                            </div>
                           )}
+
+                          <div className="md:ml-auto">
+                            <span
+                              className={`px-4 py-1.5 rounded-full text-sm font-bold shadow-sm ${
+                                p.is_completed
+                                  ? "bg-indigo-100 text-indigo-700 border border-indigo-200"
+                                  : "bg-amber-100 text-amber-700 border border-amber-200"
+                              }`}
+                            >
+                              {p.is_completed
+                                ? "✓ Sonuçlandı"
+                                : "⏱ Sonuç Bekleniyor"}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Legs - alt alta dizili at numaraları */}
+                        <div className="grid grid-cols-3 sm:grid-cols-6 gap-4 pl-4">
+                          {p.legs &&
+                            p.legs.map((leg, i) => (
+                              <div
+                                key={i}
+                                className={`border border-gray-100 rounded-2xl p-3 transition-colors ${
+                                  isPast
+                                    ? "bg-slate-50 hover:bg-slate-100"
+                                    : "bg-gray-50 hover:bg-emerald-50"
+                                }`}
+                              >
+                                <div className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">
+                                  {p.ganyan_legs
+                                    ? `${leg.leg_number}. Koşu`
+                                    : `${leg.leg_number}. Ayak`}
+                                </div>
+                                {renderHorseBadges(getLegPredictions(leg.predictions, activeMode))}
+                                {leg.winner_horse > 0 && (
+                                  <div className="mt-2 flex items-center gap-1">
+                                    <span className="text-xs text-gray-400">
+                                      Kazanan:
+                                    </span>
+                                    <span className="w-6 h-6 flex items-center justify-center bg-indigo-100 text-indigo-700 font-bold rounded-full text-xs border border-indigo-200">
+                                      {leg.winner_horse}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
                         </div>
                       </div>
-                      <div className="md:ml-auto">
-                        <span
-                          className={`px-4 py-1.5 rounded-full text-sm font-bold shadow-sm ${p.is_completed ? "bg-indigo-100 text-indigo-700 border border-indigo-200" : "bg-amber-100 text-amber-700 border border-amber-200"}`}
-                        >
-                          {p.is_completed
-                            ? "✓ Sonuçlandı"
-                            : "⏱ Sonuç Bekleniyor"}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Legs - alt alta dizili at numaraları */}
-                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-4 pl-4">
-                      {p.legs &&
-                        p.legs.map((leg, i) => (
-                          <div
-                            key={i}
-                            className="bg-gray-50 border border-gray-100 rounded-2xl p-3 transition-colors hover:bg-emerald-50"
-                          >
-                            <div className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">
-                              {p.ganyan_legs
-                                ? `${leg.leg_number}. Koşu`
-                                : `${leg.leg_number}. Ayak`}
-                            </div>
-                            {renderHorseBadges(leg.predictions)}
-                            {leg.winner_horse > 0 && (
-                              <div className="mt-2 flex items-center gap-1">
-                                <span className="text-xs text-gray-400">
-                                  Kazanan:
-                                </span>
-                                <span className="w-6 h-6 flex items-center justify-center bg-indigo-100 text-indigo-700 font-bold rounded-full text-xs border border-indigo-200">
-                                  {leg.winner_horse}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Program View */}
         {view === "program" && renderProgram()}
