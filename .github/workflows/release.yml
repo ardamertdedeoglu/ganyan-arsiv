@@ -31,7 +31,7 @@ jobs:
 
       - name: Package
         run: |
-          Compress-Archive -Path "./build/bin/Hedef Bülten.exe" -DestinationPath "hedef-bulten_${{ github.ref_name }}_windows_amd64.zip"
+          Compress-Archive -Path "./build/bin/HedefBulten.exe" -DestinationPath "hedef-bulten_${{ github.ref_name }}_windows_amd64.zip"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
