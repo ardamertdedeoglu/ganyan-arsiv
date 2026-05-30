@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import "./style.css";
 import {
   SavePrediction,
@@ -373,6 +373,20 @@ function App() {
   const [selectedGanyanType, setSelectedGanyanType] = useState(null);
   const [loadingGanyanTypes, setLoadingGanyanTypes] = useState(false);
 
+  // Program Selection Wizard state
+  const [isSelectingFromProgram, setIsSelectingFromProgram] = useState(false);
+  const [selectionLegIndex, setSelectionLegIndex] = useState(0);
+  const [wizardSelections, setWizardSelections] = useState([
+    { normal: [], genisOnly: [] },
+    { normal: [], genisOnly: [] },
+    { normal: [], genisOnly: [] },
+    { normal: [], genisOnly: [] },
+    { normal: [], genisOnly: [] },
+    { normal: [], genisOnly: [] },
+  ]);
+  const clickTimeoutRef = useRef(null);
+  const activeClickHorseRef = useRef(null);
+
   // Edit state (mevcut tahmin düzenleme)
   const [editingPrediction, setEditingPrediction] = useState(null);
   const [editDate, setEditDate] = useState("");
@@ -546,6 +560,143 @@ function App() {
   function getSilkURL(city, raceIndex, horseNo) {
     return silks?.[city]?.[raceIndex]?.[horseNo] || null;
   }
+
+  const formatLegString = (normal, genisOnly) => {
+    const normStr = normal.join(", ");
+    const genStr = genisOnly.join(", ");
+    if (normStr && genStr) {
+      return `${normStr} / ${genStr}`;
+    } else if (normStr) {
+      return normStr;
+    } else if (genStr) {
+      return `/ ${genStr}`;
+    }
+    return "";
+  };
+
+  const startProgramSelection = () => {
+    if (!selectedGanyanType) return;
+    
+    // Initialize wizard state
+    setWizardSelections([
+      { normal: [], genisOnly: [] },
+      { normal: [], genisOnly: [] },
+      { normal: [], genisOnly: [] },
+      { normal: [], genisOnly: [] },
+      { normal: [], genisOnly: [] },
+      { normal: [], genisOnly: [] },
+    ]);
+    setSelectionLegIndex(0);
+    setIsSelectingFromProgram(true);
+    
+    // Auto navigation to program view
+    setView("program");
+    setProgramDate(date);
+    setSelectedProgramCity(city);
+    fetchPrograms(date);
+    
+    // Auto select first race of the selected ganyan type
+    const firstRaceNo = selectedGanyanType.races[0];
+    setSelectedRaceIndex(firstRaceNo - 1);
+  };
+
+  const cancelWizard = () => {
+    setIsSelectingFromProgram(false);
+    setView("form");
+  };
+
+  const prevWizardLeg = () => {
+    if (selectionLegIndex > 0) {
+      const prevIdx = selectionLegIndex - 1;
+      setSelectionLegIndex(prevIdx);
+      const prevRaceNo = selectedGanyanType.races[prevIdx];
+      setSelectedRaceIndex(prevRaceNo - 1);
+    }
+  };
+
+  const nextWizardLeg = () => {
+    if (selectionLegIndex < 5) {
+      const nextIdx = selectionLegIndex + 1;
+      setSelectionLegIndex(nextIdx);
+      const nextRaceNo = selectedGanyanType.races[nextIdx];
+      setSelectedRaceIndex(nextRaceNo - 1);
+    } else {
+      // Completed! Populate the legs of the prediction form
+      const formattedLegs = legs.map((leg, i) => {
+        const wiz = wizardSelections[i];
+        const formatted = formatLegString(wiz.normal, wiz.genisOnly);
+        return {
+          ...leg,
+          predictions: formatted,
+        };
+      });
+      setLegs(formattedLegs);
+      setIsSelectingFromProgram(false);
+      setView("form");
+    }
+  };
+
+  const handleHorseClick = (horseNo, isDoubleClick) => {
+    if (!isSelectingFromProgram) return;
+    
+    const horseNum = parseInt(horseNo, 10);
+    if (isNaN(horseNum)) return;
+
+    setWizardSelections(prev => {
+      const next = [...prev];
+      const leg = { ...next[selectionLegIndex] };
+      
+      const inNormal = leg.normal.includes(horseNum);
+      const inGenisOnly = leg.genisOnly.includes(horseNum);
+
+      if (isDoubleClick) {
+        // Double click -> should go to genisOnly (only genis)
+        if (inGenisOnly) {
+          // Toggle off: was genisOnly, now remove
+          leg.genisOnly = leg.genisOnly.filter(n => n !== horseNum);
+        } else {
+          // Move from normal to genisOnly or just add to genisOnly
+          leg.normal = leg.normal.filter(n => n !== horseNum);
+          leg.genisOnly = [...leg.genisOnly, horseNum];
+        }
+      } else {
+        // Single click -> should go to normal (both normal & genis)
+        if (inNormal) {
+          // Toggle off: was normal, now remove
+          leg.normal = leg.normal.filter(n => n !== horseNum);
+        } else {
+          // Move from genisOnly to normal or just add to normal
+          leg.genisOnly = leg.genisOnly.filter(n => n !== horseNum);
+          leg.normal = [...leg.normal, horseNum];
+        }
+      }
+      
+      next[selectionLegIndex] = leg;
+      return next;
+    });
+  };
+
+  const handleHorseClickWrapper = (e, horseNo) => {
+    e.preventDefault();
+    if (!isSelectingFromProgram) return;
+
+    if (clickTimeoutRef.current && activeClickHorseRef.current === horseNo) {
+      clearTimeout(clickTimeoutRef.current);
+      clickTimeoutRef.current = null;
+      activeClickHorseRef.current = null;
+      handleHorseClick(horseNo, true);
+    } else {
+      if (clickTimeoutRef.current) {
+        clearTimeout(clickTimeoutRef.current);
+      }
+      activeClickHorseRef.current = horseNo;
+      clickTimeoutRef.current = setTimeout(() => {
+        handleHorseClick(horseNo, false);
+        clickTimeoutRef.current = null;
+        activeClickHorseRef.current = null;
+      }, 250);
+    }
+  };
 
   function handleLegChange(index, value) {
     const newLegs = [...legs];
@@ -730,7 +881,7 @@ function App() {
     if (!preds || preds.length === 0)
       return <span className="text-gray-400 text-sm">-</span>;
     return (
-      <div className="flex flex-col gap-1.5 mt-1">
+      <div className="flex flex-col items-center gap-1.5 mt-1">
         {preds.map((p, idx) => {
           const isWinner = winnerHorse > 0 && p === winnerHorse;
           return (
@@ -753,6 +904,130 @@ function App() {
   function renderProgram() {
     return (
       <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+        {/* Selection Wizard Banner */}
+        {isSelectingFromProgram && selectedGanyanType && (
+          <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white p-6 rounded-3xl shadow-xl border border-slate-800 mb-6 animate-in slide-in-from-top-4 duration-500 sticky top-4 z-40">
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800/85">
+                <div>
+                  <h3 className="text-lg font-black tracking-tight text-white flex items-center gap-2">
+                    <span className="animate-pulse">🔮</span>
+                    Tahmin Seçim Sihirbazı
+                  </h3>
+                  <p className="text-xs font-semibold text-slate-400 mt-0.5 uppercase tracking-wider">
+                    {selectedProgramCity} • {programDate} • {selectedGanyanType.name}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2.5">
+                  {selectionLegIndex > 0 && (
+                    <button
+                      onClick={prevWizardLeg}
+                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold px-4 py-2.5 rounded-xl text-xs transition-colors cursor-pointer border-none"
+                    >
+                      ← Geri
+                    </button>
+                  )}
+                  <button
+                    onClick={cancelWizard}
+                    className="bg-rose-950/45 hover:bg-rose-900/60 text-rose-300 border border-rose-800/30 font-bold px-4 py-2.5 rounded-xl text-xs transition-colors cursor-pointer border-none"
+                  >
+                    İptal Et
+                  </button>
+                  <button
+                    onClick={nextWizardLeg}
+                    className={`font-extrabold px-5 py-2.5 rounded-xl text-xs shadow-md transition-all cursor-pointer border-none flex items-center gap-1.5 ${
+                      selectionLegIndex === 5
+                        ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-900/30 animate-pulse"
+                        : "bg-indigo-600 hover:bg-indigo-700 text-white"
+                    }`}
+                  >
+                    {selectionLegIndex === 5 ? "Seçimi Tamamla ✓" : "Sonraki Ayak →"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Progress Steps */}
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 select-none">
+                {Array.from({ length: 6 }).map((_, i) => {
+                  const isActive = selectionLegIndex === i;
+                  const wiz = wizardSelections[i];
+                  const hasNormal = wiz?.normal?.length > 0;
+                  const hasGenis = wiz?.genisOnly?.length > 0;
+                  const isCompleted = hasNormal || hasGenis;
+                  const actualRace = selectedGanyanType.races[i];
+
+                  return (
+                    <div
+                      key={i}
+                      onClick={() => {
+                        setSelectionLegIndex(i);
+                        setSelectedRaceIndex(actualRace - 1);
+                      }}
+                      className={`cursor-pointer rounded-xl p-2.5 transition-all text-center border group ${
+                        isActive
+                          ? "bg-emerald-600 border-emerald-500 shadow-md text-white scale-102"
+                          : isCompleted
+                            ? "bg-slate-800/80 border-emerald-500/30 text-emerald-400 hover:bg-slate-800"
+                            : "bg-slate-800/40 border-slate-800/40 text-slate-500 hover:bg-slate-800/60"
+                      }`}
+                    >
+                      <div className="text-[10px] font-black tracking-wider uppercase opacity-80 leading-none mb-1">
+                        {i + 1}. Ayak
+                      </div>
+                      <div className="font-extrabold text-[11px] leading-tight">
+                        {actualRace}. Koşu
+                      </div>
+                      <div className="text-[9px] font-semibold mt-1 opacity-90 truncate max-w-full">
+                        {isCompleted ? (
+                          <span>
+                            {wiz.normal.join(",")}
+                            {wiz.genisOnly.length > 0 && (
+                              <span className="text-indigo-400 font-bold">
+                                /{wiz.genisOnly.join(",")}
+                              </span>
+                            )}
+                          </span>
+                        ) : (
+                          "Boş"
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              
+              {/* Selected Horses List */}
+              <div className="bg-slate-900/60 p-3 rounded-2xl border border-slate-800/60 flex flex-col md:flex-row md:items-center justify-between gap-2.5 text-xs">
+                <div className="flex flex-wrap gap-4 items-center">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Normal + Geniş:</span>
+                    {wizardSelections[selectionLegIndex]?.normal?.length > 0 ? (
+                      <span className="font-extrabold text-emerald-400 bg-emerald-950/40 border border-emerald-500/20 px-2 py-0.5 rounded">
+                        {wizardSelections[selectionLegIndex].normal.join(", ")}
+                      </span>
+                    ) : (
+                      <span className="text-slate-500 italic">Seçilmedi</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Sadece Geniş:</span>
+                    {wizardSelections[selectionLegIndex]?.genisOnly?.length > 0 ? (
+                      <span className="font-extrabold text-indigo-400 bg-indigo-950/40 border border-indigo-500/20 px-2 py-0.5 rounded">
+                        {wizardSelections[selectionLegIndex].genisOnly.join(", ")}
+                      </span>
+                    ) : (
+                      <span className="text-slate-500 italic">Seçilmedi</span>
+                    )}
+                  </div>
+                </div>
+                <div className="text-[10px] font-bold text-slate-400 leading-none">
+                  💡 <span className="underline">İpucu:</span> Normal için tek tık, sadece geniş için çift tık. Kaldırmak için tekrar tıklayın.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 mb-6">
           <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
             <div className="flex items-center gap-3">
@@ -899,54 +1174,88 @@ function App() {
                           </thead>
                           <tbody className="divide-y divide-gray-50">
                             {selectedRace.horses &&
-                              selectedRace.horses.map((horse, j) => (
-                                <tr
-                                  key={j}
-                                  className="hover:bg-emerald-50/50 transition-colors"
-                                >
-                                  <td className="p-3 font-bold text-center text-gray-400 text-base">
-                                    {horse.horse_no}
-                                  </td>
-                                  {/* Forma / Silk */}
-                                  <td className="p-2 text-center">
-                                    {(() => {
-                                      const silkURL = getSilkURL(
-                                        p.city,
-                                        selectedRaceIndex,
-                                        horse.horse_no,
-                                      );
-                                      if (silkURL) {
-                                        return (
-                                          <img
-                                            src={silkURL}
-                                            alt={`Forma ${horse.horse_no}`}
-                                            className="h-12 w-auto object-contain rounded mx-auto"
-                                            onError={(e) => {
-                                              e.target.style.display = "none";
-                                            }}
-                                          />
+                              selectedRace.horses.map((horse, j) => {
+                                const actualRaceNo = selectedGanyanType?.races?.[selectionLegIndex];
+                                const isCurrentRaceLeg = isSelectingFromProgram && selectedRaceIndex === (actualRaceNo - 1);
+                                const horseNum = parseInt(horse.horse_no, 10);
+                                const inNormal = isCurrentRaceLeg && wizardSelections[selectionLegIndex]?.normal?.includes(horseNum);
+                                const inGenisOnly = isCurrentRaceLeg && wizardSelections[selectionLegIndex]?.genisOnly?.includes(horseNum);
+
+                                const rowClassName = isCurrentRaceLeg
+                                  ? inNormal
+                                    ? "bg-emerald-50 hover:bg-emerald-100/70 border-l-4 border-emerald-500 cursor-pointer select-none transition-all duration-200"
+                                    : inGenisOnly
+                                      ? "bg-indigo-50 hover:bg-indigo-100/70 border-l-4 border-indigo-500 cursor-pointer select-none transition-all duration-200"
+                                      : "hover:bg-slate-100 cursor-pointer select-none transition-all duration-200"
+                                  : "hover:bg-emerald-50/50 transition-colors";
+
+                                const rowProps = isCurrentRaceLeg
+                                  ? { onClick: (e) => handleHorseClickWrapper(e, horse.horse_no) }
+                                  : {};
+
+                                return (
+                                  <tr
+                                    key={j}
+                                    className={rowClassName}
+                                    {...rowProps}
+                                  >
+                                    <td className="p-3 font-bold text-center text-gray-400 text-base">
+                                      {horse.horse_no}
+                                    </td>
+                                    {/* Forma / Silk */}
+                                    <td className="p-2 text-center">
+                                      {(() => {
+                                        const silkURL = getSilkURL(
+                                          p.city,
+                                          selectedRaceIndex,
+                                          horse.horse_no,
                                         );
-                                      } else if (loadingSilks) {
-                                        return (
-                                          <div className="w-6 h-6 mx-auto rounded-full border-2 border-gray-200 border-t-emerald-400 animate-spin" />
-                                        );
-                                      } else {
-                                        return (
-                                          <span className="text-gray-300 text-xs">
-                                            —
+                                        if (silkURL) {
+                                          return (
+                                            <img
+                                              src={silkURL}
+                                              alt={`Forma ${horse.horse_no}`}
+                                              className="h-12 w-auto object-contain rounded mx-auto"
+                                              onError={(e) => {
+                                                e.target.style.display = "none";
+                                              }}
+                                            />
+                                          );
+                                        } else if (loadingSilks) {
+                                          return (
+                                            <div className="w-6 h-6 mx-auto rounded-full border-2 border-gray-200 border-t-emerald-400 animate-spin" />
+                                          );
+                                        } else {
+                                          return (
+                                            <span className="text-gray-300 text-xs">
+                                              —
+                                            </span>
+                                          );
+                                        }
+                                      })()}
+                                    </td>
+                                    <td className="p-3">
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-bold text-gray-800 text-base">
+                                          {horse.name}
+                                        </span>
+                                        {inNormal && (
+                                          <span className="bg-emerald-100 text-emerald-800 border border-emerald-200/50 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wide flex items-center gap-1 select-none animate-in scale-in duration-200">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                            Normal + Geniş
                                           </span>
-                                        );
-                                      }
-                                    })()}
-                                  </td>
-                                  <td className="p-3">
-                                    <div className="font-bold text-gray-800 text-base">
-                                      {horse.name}
-                                    </div>
-                                    <div className="text-xs text-gray-500 font-medium mt-0.5">
-                                      {horse.age}
-                                    </div>
-                                  </td>
+                                        )}
+                                        {inGenisOnly && (
+                                          <span className="bg-indigo-100 text-indigo-800 border border-indigo-200/50 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wide flex items-center gap-1 select-none animate-in scale-in duration-200">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                                            Sadece Geniş
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="text-xs text-gray-500 font-medium mt-0.5">
+                                        {horse.age}
+                                      </div>
+                                    </td>
                                   <td className="p-3">
                                     <div className="font-bold text-emerald-700 text-base">
                                       {horse.weight}
@@ -1022,7 +1331,8 @@ function App() {
                                     </div>
                                   </td>
                                 </tr>
-                              ))}
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
@@ -1941,9 +2251,21 @@ function App() {
               </div>
 
               <div className="space-y-4">
-                <h3 className="font-bold text-xl text-gray-800 mb-4">
-                  Ayak Tahminleri
-                </h3>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 select-none">
+                  <h3 className="font-bold text-xl text-gray-800">
+                    Ayak Tahminleri
+                  </h3>
+                  {selectedGanyanType && (
+                    <button
+                      type="button"
+                      onClick={startProgramSelection}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold px-5 py-3 rounded-2xl text-sm shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 cursor-pointer border-none"
+                    >
+                      <span>📋</span>
+                      Yarış Programından Seç
+                    </button>
+                  )}
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {legs.map((leg, i) => {
                     const actualRaceNo = selectedGanyanType?.races
@@ -2550,7 +2872,7 @@ function App() {
                                             : "bg-gray-50 border-gray-100 hover:bg-emerald-50"
                                     }`}
                                   >
-                                    <div className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">
+                                    <div className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1 text-center">
                                       {p.ganyan_legs
                                         ? `${leg.leg_number}. Koşu`
                                         : `${leg.leg_number}. Ayak`}
@@ -2560,7 +2882,7 @@ function App() {
                                       leg.winner_horse,
                                     )}
                                     {leg.winner_horse > 0 && (
-                                      <div className="mt-2 flex items-center gap-1">
+                                      <div className="mt-2 flex items-center justify-center gap-1">
                                         <span className="text-xs text-gray-400">
                                           Kazanan:
                                         </span>

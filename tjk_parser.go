@@ -264,7 +264,6 @@ func FetchAllPrograms(date string) []RaceProgram {
 			resp.Body.Close()
 			if prog != nil {
 				prog.Tevzi = FetchTevzi(c, date)
-				EnrichBetTypesFromHTML(prog)
 			}
 			ch <- result{c, prog}
 		}(city)
@@ -497,7 +496,6 @@ func FetchSingleProgram(city, date string) *RaceProgram {
 	prog := parseCSVProgram(city, date, resp.Body)
 	if prog != nil {
 		prog.Tevzi = FetchTevzi(city, date)
-		EnrichBetTypesFromHTML(prog)
 	}
 	return prog
 }
@@ -699,65 +697,4 @@ func FetchTevzi(city, date string) map[string]string {
 	})
 
 	return result
-}
-
-// EnrichBetTypesFromHTML scrapes bet types dynamically from TJK daily program HTML
-// and merges/enriches the parsed CSV program structure.
-func EnrichBetTypesFromHTML(prog *RaceProgram) {
-	if prog == nil || len(prog.Races) == 0 {
-		return
-	}
-
-	doc, err := fetchCityHTML(prog.City, prog.Date)
-	if err != nil {
-		return
-	}
-
-	raceIndex := 0
-	doc.Find("div.races-panes > div[id]").Each(func(_ int, raceDiv *goquery.Selection) {
-		id, exists := raceDiv.Attr("id")
-		if !exists || id == "" || id == "all" {
-			return
-		}
-
-		if raceIndex >= len(prog.Races) {
-			return
-		}
-
-		// Find bet types in the HTML
-		var htmlBets []string
-		raceDiv.Find(".bahisTipiGridContainer .bahisTipiCard h4").Each(func(_ int, h4 *goquery.Selection) {
-			text := strings.TrimSpace(h4.Text())
-			if text != "" {
-				htmlBets = append(htmlBets, text)
-			}
-		})
-
-		if len(htmlBets) > 0 {
-			var finalBets []string
-			// 1. Keep any CSV parsed eküri info
-			for _, csvBet := range prog.Races[raceIndex].BetTypes {
-				if strings.Contains(csvBet, "eküri") || strings.Contains(csvBet, "eküridir") {
-					finalBets = append(finalBets, csvBet)
-				}
-			}
-
-			// 2. Add all HTML bets (preventing duplicates)
-			for _, htmlBet := range htmlBets {
-				duplicate := false
-				for _, b := range finalBets {
-					if b == htmlBet {
-						duplicate = true
-						break
-					}
-				}
-				if !duplicate {
-					finalBets = append(finalBets, htmlBet)
-				}
-			}
-
-			prog.Races[raceIndex].BetTypes = finalBets
-		}
-		raceIndex++
-	})
 }
