@@ -3,6 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"time"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App struct
@@ -67,5 +71,112 @@ func (a *App) GetGanyanTypes(city, date string) ([]GanyanInfo, error) {
 // ForceCheckResults triggers the background results checker instantly
 func (a *App) ForceCheckResults() {
 	checkAndUpdateResults(a.ctx)
+}
+
+// BackupPredictions exports the database file to a user selected path
+func (a *App) BackupPredictions() (string, error) {
+	dbPath, err := getDBPath()
+	if err != nil {
+		return "", err
+	}
+
+	// Ensure source exists
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("yedeklenecek tahmin veritabanı bulunamadı")
+	}
+
+	nowStr := time.Now().Format("2006-01-02_15-04-05")
+	defaultName := fmt.Sprintf("tahminler_yedek_%s.bak", nowStr)
+
+	selectedPath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "Yedek Kaydet (.bak)",
+		DefaultFilename: defaultName,
+		Filters: []runtime.FileFilter{
+			{
+				DisplayName: "Yedek Dosyaları (*.bak)",
+				Pattern:     "*.bak",
+			},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if selectedPath == "" {
+		return "Seçim iptal edildi", nil
+	}
+
+	// Read db file under read lock
+	dbMutex.RLock()
+	data, err := os.ReadFile(dbPath)
+	dbMutex.RUnlock()
+	if err != nil {
+		return "", fmt.Errorf("veritabanı dosyası okunamadı: %w", err)
+	}
+
+	// Write to backup file
+	err = os.WriteFile(selectedPath, data, 0644)
+	if err != nil {
+		return "", fmt.Errorf("yedek dosyası oluşturulamadı: %w", err)
+	}
+
+	return "Yedek başarıyla oluşturuldu!", nil
+}
+
+// RestorePredictions imports predictions from a selected backup file
+func (a *App) RestorePredictions() (string, error) {
+	selectedPath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Yedek Seç (.bak)",
+		Filters: []runtime.FileFilter{
+			{
+				DisplayName: "Yedek Dosyaları (*.bak)",
+				Pattern:     "*.bak",
+			},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if selectedPath == "" {
+		return "Seçim iptal edildi", nil
+	}
+
+	// Close current DB connection
+	err = CloseDB()
+	if err != nil {
+		return "", fmt.Errorf("veritabanı kapatılamadı: %w", err)
+	}
+
+	dbPath, err := getDBPath()
+	if err != nil {
+		_ = InitDB() // Recover connection
+		return "", err
+	}
+
+	// Read backup file bytes
+	sourceData, err := os.ReadFile(selectedPath)
+	if err != nil {
+		_ = InitDB() // Recover connection
+		return "", fmt.Errorf("yedek dosyası okunamadı: %w", err)
+	}
+
+	// Write backup to normal db path under dbMutex lock
+	dbMutex.Lock()
+	err = os.WriteFile(dbPath, sourceData, 0644)
+	dbMutex.Unlock()
+	if err != nil {
+		_ = InitDB() // Recover connection
+		return "", fmt.Errorf("veritabanı dosyası güncellenemedi: %w", err)
+	}
+
+	// Reopen DB connection
+	err = InitDB()
+	if err != nil {
+		return "", fmt.Errorf("veritabanı yeniden yüklenirken hata oluştu: %w", err)
+	}
+
+	// Notify frontend of potential updates
+	runtime.EventsEmit(a.ctx, "predictions-updated")
+
+	return "Yedek başarıyla yüklendi!", nil
 }
 

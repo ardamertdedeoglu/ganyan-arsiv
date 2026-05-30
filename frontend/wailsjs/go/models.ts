@@ -132,6 +132,7 @@ export namespace main {
 	    age_group: string;
 	    distance: string;
 	    horses: Horse[];
+	    bet_types: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Race(source);
@@ -145,6 +146,7 @@ export namespace main {
 	        this.age_group = source["age_group"];
 	        this.distance = source["distance"];
 	        this.horses = this.convertValues(source["horses"], Horse);
+	        this.bet_types = source["bet_types"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

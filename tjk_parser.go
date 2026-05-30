@@ -34,12 +34,13 @@ type Horse struct {
 }
 
 type Race struct {
-	RaceName  string  `json:"race_name"`
-	Time      string  `json:"time"`
-	Condition string  `json:"condition"`
-	AgeGroup  string  `json:"age_group"`
-	Distance  string  `json:"distance"`
-	Horses    []Horse `json:"horses"`
+	RaceName  string   `json:"race_name"`
+	Time      string   `json:"time"`
+	Condition string   `json:"condition"`
+	AgeGroup  string   `json:"age_group"`
+	Distance  string   `json:"distance"`
+	Horses    []Horse  `json:"horses"`
+	BetTypes  []string `json:"bet_types"`
 }
 
 type RaceProgram struct {
@@ -100,7 +101,7 @@ func parseCSVProgram(city, date string, r io.Reader) *RaceProgram {
 			if currentRace != nil && len(currentRace.Horses) > 0 {
 				prog.Races = append(prog.Races, *currentRace)
 			}
-			currentRace = &Race{}
+			currentRace = &Race{BetTypes: []string{}}
 			if idx := strings.Index(strings.ToLower(firstCol), "saat"); idx != -1 {
 				currentRace.RaceName = strings.TrimSpace(firstCol[:idx])
 				timePart := strings.TrimSpace(firstCol[idx:])
@@ -153,10 +154,26 @@ func parseCSVProgram(city, date string, r io.Reader) *RaceProgram {
 		// Detect footer lines to stop reading horses for current race
 		if inHorseList && (strings.Contains(firstCol, "GANYAN") || strings.Contains(firstCol, "ÇİFTE") || strings.HasPrefix(firstCol, "[")) {
 			inHorseList = false
+			if currentRace != nil {
+				for _, col := range record {
+					trimmed := strings.TrimSpace(col)
+					if trimmed != "" {
+						currentRace.BetTypes = append(currentRace.BetTypes, trimmed)
+					}
+				}
+			}
 			continue
 		} // Handle case where sometimes first col is empty but it's a footer
 		if inHorseList && firstCol == "" && len(record) > 1 && strings.Contains(record[1], "GANYAN") {
 			inHorseList = false
+			if currentRace != nil {
+				for _, col := range record {
+					trimmed := strings.TrimSpace(col)
+					if trimmed != "" {
+						currentRace.BetTypes = append(currentRace.BetTypes, trimmed)
+					}
+				}
+			}
 			continue
 		}
 
@@ -247,6 +264,7 @@ func FetchAllPrograms(date string) []RaceProgram {
 			resp.Body.Close()
 			if prog != nil {
 				prog.Tevzi = FetchTevzi(c, date)
+				EnrichBetTypesFromHTML(prog)
 			}
 			ch <- result{c, prog}
 		}(city)
@@ -479,6 +497,7 @@ func FetchSingleProgram(city, date string) *RaceProgram {
 	prog := parseCSVProgram(city, date, resp.Body)
 	if prog != nil {
 		prog.Tevzi = FetchTevzi(city, date)
+		EnrichBetTypesFromHTML(prog)
 	}
 	return prog
 }
@@ -680,4 +699,65 @@ func FetchTevzi(city, date string) map[string]string {
 	})
 
 	return result
+}
+
+// EnrichBetTypesFromHTML scrapes bet types dynamically from TJK daily program HTML
+// and merges/enriches the parsed CSV program structure.
+func EnrichBetTypesFromHTML(prog *RaceProgram) {
+	if prog == nil || len(prog.Races) == 0 {
+		return
+	}
+
+	doc, err := fetchCityHTML(prog.City, prog.Date)
+	if err != nil {
+		return
+	}
+
+	raceIndex := 0
+	doc.Find("div.races-panes > div[id]").Each(func(_ int, raceDiv *goquery.Selection) {
+		id, exists := raceDiv.Attr("id")
+		if !exists || id == "" || id == "all" {
+			return
+		}
+
+		if raceIndex >= len(prog.Races) {
+			return
+		}
+
+		// Find bet types in the HTML
+		var htmlBets []string
+		raceDiv.Find(".bahisTipiGridContainer .bahisTipiCard h4").Each(func(_ int, h4 *goquery.Selection) {
+			text := strings.TrimSpace(h4.Text())
+			if text != "" {
+				htmlBets = append(htmlBets, text)
+			}
+		})
+
+		if len(htmlBets) > 0 {
+			var finalBets []string
+			// 1. Keep any CSV parsed eküri info
+			for _, csvBet := range prog.Races[raceIndex].BetTypes {
+				if strings.Contains(csvBet, "eküri") || strings.Contains(csvBet, "eküridir") {
+					finalBets = append(finalBets, csvBet)
+				}
+			}
+
+			// 2. Add all HTML bets (preventing duplicates)
+			for _, htmlBet := range htmlBets {
+				duplicate := false
+				for _, b := range finalBets {
+					if b == htmlBet {
+						duplicate = true
+						break
+					}
+				}
+				if !duplicate {
+					finalBets = append(finalBets, htmlBet)
+				}
+			}
+
+			prog.Races[raceIndex].BetTypes = finalBets
+		}
+		raceIndex++
+	})
 }

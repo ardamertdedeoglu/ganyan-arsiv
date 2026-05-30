@@ -12,6 +12,8 @@ import {
   GetAppVersion,
   GetGanyanTypes,
   ForceCheckResults,
+  BackupPredictions,
+  RestorePredictions,
 } from "../wailsjs/go/main/App";
 import { EventsOn } from "../wailsjs/runtime/runtime";
 
@@ -347,6 +349,14 @@ function App() {
   const [updating, setUpdating] = useState(false);
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const [appVersion, setAppVersion] = useState("");
+
+  // Settings view states
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState(null); // { type: 'success' | 'info' | 'error', text: '' }
+  const [backingUp, setBackingUp] = useState(false);
+  const [backupMessage, setBackupMessage] = useState(null); // { type: 'success' | 'info' | 'error', text: '' }
+  const [restoring, setRestoring] = useState(false);
+  const [restoreMessage, setRestoreMessage] = useState(null); // { type: 'success' | 'info' | 'error', text: '' }
 
   // Form state (yeni tahmin oluşturma)
   const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
@@ -1016,6 +1026,100 @@ function App() {
                           </tbody>
                         </table>
                       </div>
+
+                      {/* Premium Bet Types Grid & Info Panel */}
+                      {selectedRace.bet_types &&
+                        selectedRace.bet_types.length > 0 && (
+                          <div className="bg-slate-50/50 p-6 border-t border-gray-100 animate-in fade-in duration-300">
+                            {(() => {
+                              // Categorize and clean bet types
+                              const bets = [];
+                              const ekuris = [];
+
+                              selectedRace.bet_types.forEach((item) => {
+                                const current = item.trim();
+                                if (!current) return;
+
+                                if (current.includes("eküridir.")) {
+                                  const parts = current.split("eküridir.");
+                                  const ekuriPart = parts[0] + " eküridir.";
+                                  ekuris.push(ekuriPart.trim());
+                                  if (parts[1] && parts[1].trim()) {
+                                    bets.push(parts[1].trim());
+                                  }
+                                } else if (current.includes("eküridir")) {
+                                  ekuris.push(current);
+                                } else {
+                                  bets.push(current);
+                                }
+                              });
+
+                              return (
+                                <div className="space-y-4 text-left">
+                                  {/* Eküri Warning Alert */}
+                                  {ekuris.map((ekuri, idx) => (
+                                    <div
+                                      key={idx}
+                                      className="bg-amber-50 border border-amber-200/60 rounded-2xl p-4 text-amber-900 text-sm font-semibold flex items-start gap-3 shadow-sm"
+                                    >
+                                      <span className="text-lg leading-none select-none">
+                                        🐎
+                                      </span>
+                                      <div className="flex-1">
+                                        <span className="font-extrabold text-amber-800 uppercase tracking-wide block text-[11px] mb-0.5">
+                                          Eküri Bilgisi
+                                        </span>
+                                        {ekuri}
+                                      </div>
+                                    </div>
+                                  ))}
+
+                                  {/* Bet Types Badges */}
+                                  <div>
+                                    <div className="flex flex-wrap gap-2.5">
+                                      {bets.map((bet, idx) => {
+                                        const isSpecialStart =
+                                          bet.includes("Bu koşudan başlar");
+                                        const cleanBetName = bet
+                                          .replace("Bu koşudan başlar", "")
+                                          .trim();
+
+                                        if (isSpecialStart) {
+                                          return (
+                                            <div
+                                              key={idx}
+                                              className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white px-4.5 py-2.5 rounded-2xl text-sm font-bold shadow-md hover:shadow-lg transition-all duration-300 flex items-center gap-2"
+                                            >
+                                              <span className="w-2 h-2 rounded-full bg-emerald-300 animate-ping" />
+                                              <span>
+                                                <span className="font-extrabold text-emerald-100">
+                                                  {cleanBetName}
+                                                </span>
+                                                <span className="text-white ml-1.5 text-xs font-semibold bg-emerald-950/20 px-2 py-0.5 rounded border border-emerald-500/20">
+                                                  Bu Koşudan Başlar!
+                                                </span>
+                                              </span>
+                                            </div>
+                                          );
+                                        }
+
+                                        // Elegant badges for standard bets
+                                        return (
+                                          <span
+                                            key={idx}
+                                            className="bg-white hover:bg-slate-100 text-slate-700 border border-slate-200/80 px-4 py-2.5 rounded-2xl text-xs font-extrabold shadow-sm hover:shadow transition-all duration-200 uppercase tracking-wider"
+                                          >
+                                            {bet}
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        )}
                     </div>
                   )}
                 </div>
@@ -1023,6 +1127,288 @@ function App() {
             })}
           </div>
         )}
+      </div>
+    );
+  }
+
+  const handleManualCheckUpdate = () => {
+    setCheckingUpdates(true);
+    setUpdateStatus(null);
+    CheckForUpdate()
+      .then((result) => {
+        if (result.updateAvailable) {
+          setUpdateInfo(result);
+          setUpdateStatus({
+            type: "success",
+            text: `Yeni güncelleme mevcut: ${result.latestVersion} (Mevcut: ${result.currentVersion})`,
+          });
+        } else {
+          setUpdateStatus({
+            type: "info",
+            text: `Uygulama güncel! Son sürümü kullanıyorsunuz (${appVersion || result.currentVersion}).`,
+          });
+        }
+      })
+      .catch((err) => {
+        console.error("Manual update check failed:", err);
+        setUpdateStatus({
+          type: "error",
+          text: "Güncelleme kontrolü sırasında hata oluştu: " + err,
+        });
+      })
+      .finally(() => {
+        setCheckingUpdates(false);
+      });
+  };
+
+  const handleBackup = () => {
+    setBackingUp(true);
+    setBackupMessage(null);
+    BackupPredictions()
+      .then((msg) => {
+        if (msg.includes("başarıyla") || msg.includes("başarılı")) {
+          setBackupMessage({ type: "success", text: msg });
+        } else if (msg.includes("iptal")) {
+          setBackupMessage({ type: "info", text: msg });
+        } else {
+          setBackupMessage({ type: "error", text: msg });
+        }
+      })
+      .catch((err) => {
+        console.error("Backup failed:", err);
+        setBackupMessage({ type: "error", text: "Yedekleme hatası: " + err });
+      })
+      .finally(() => {
+        setBackingUp(false);
+      });
+  };
+
+  const handleRestore = () => {
+    if (
+      !confirm(
+        "Yedek yükleme işlemi mevcut tüm tahminlerinizi SİLECEK ve yedek dosyasındaki verileri yükleyecektir.\n\nDevam etmek istediğinize emin misiniz?",
+      )
+    ) {
+      return;
+    }
+    setRestoring(true);
+    setRestoreMessage(null);
+    RestorePredictions()
+      .then((msg) => {
+        if (msg.includes("başarıyla") || msg.includes("başarılı")) {
+          setRestoreMessage({ type: "success", text: msg });
+          loadPredictions();
+        } else if (msg.includes("iptal")) {
+          setRestoreMessage({ type: "info", text: msg });
+        } else {
+          setRestoreMessage({ type: "error", text: msg });
+        }
+      })
+      .catch((err) => {
+        console.error("Restore failed:", err);
+        setRestoreMessage({ type: "error", text: "Yükleme hatası: " + err });
+      })
+      .finally(() => {
+        setRestoring(false);
+      });
+  };
+
+  function renderSettings() {
+    return (
+      <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-4xl mx-auto">
+        <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-100 mb-8 text-left">
+          <h2 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
+            <span className="bg-slate-100 p-2 rounded-2xl select-none">⚙️</span>
+            Uygulama Ayarları
+          </h2>
+          <p className="text-gray-500 mt-2 font-medium">
+            Uygulama güncellemelerini yönetin, verilerinizi yedekleyin veya eski
+            tahminlerinizi geri yükleyin.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-left">
+          {/* Card 1: Güncellemeleri Denetle */}
+          <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm hover:shadow-md hover:-translate-y-1 transition-all duration-300 flex flex-col justify-between h-full">
+            <div>
+              <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center mb-4 select-none">
+                <svg
+                  className={`w-6 h-6 text-emerald-600 ${checkingUpdates ? "animate-spin" : ""}`}
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  viewBox="0 0 24 24"
+                >
+                  <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.72 2.78L21 8" />
+                  <polyline points="21 3 21 8 16 8" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-black text-slate-800 mb-2">
+                Güncellemeleri Denetle
+              </h3>
+              <p className="text-gray-500 text-xs font-semibold leading-relaxed mb-4">
+                Yeni sürümleri GitHub üzerinden kontrol edin ve uygulamanızı
+                anlık olarak güncelleyin.
+              </p>
+              {appVersion && (
+                <div className="bg-slate-50 text-slate-600 px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-200/50 inline-block mb-4 select-none">
+                  Mevcut Sürüm: {appVersion}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-3 mt-4">
+              <button
+                onClick={handleManualCheckUpdate}
+                disabled={checkingUpdates}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-4 rounded-xl shadow-md hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-xs flex items-center justify-center gap-2 cursor-pointer border-none"
+              >
+                {checkingUpdates ? (
+                  <>
+                    <div className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                    Kontrol Ediliyor...
+                  </>
+                ) : (
+                  "Şimdi Denetle"
+                )}
+              </button>
+
+              {updateStatus && (
+                <div
+                  className={`p-3 rounded-xl text-xs font-bold border ${
+                    updateStatus.type === "success"
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+                      : updateStatus.type === "error"
+                        ? "bg-red-50 text-red-700 border-red-100"
+                        : "bg-slate-50 text-slate-600 border-slate-200"
+                  } animate-in fade-in duration-300`}
+                >
+                  {updateStatus.text}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Card 2: Tahminleri Yedekle */}
+          <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm hover:shadow-md hover:-translate-y-1 transition-all duration-300 flex flex-col justify-between h-full">
+            <div>
+              <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center mb-4 select-none">
+                <svg
+                  className={`w-6 h-6 text-indigo-600 ${backingUp ? "animate-bounce" : ""}`}
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  viewBox="0 0 24 24"
+                >
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" x2="12" y1="3" y2="15" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-black text-slate-800 mb-2">
+                Tahminleri Yedekle
+              </h3>
+              <p className="text-gray-500 text-xs font-semibold leading-relaxed mb-4">
+                Tüm kayıtlı tahminlerinizi `.bak` uzantılı bir yedek dosyası
+                olarak istediğiniz klasöre güvenle çıkartın.
+              </p>
+            </div>
+
+            <div className="space-y-3 mt-4">
+              <button
+                onClick={handleBackup}
+                disabled={backingUp}
+                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-md hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-xs flex items-center justify-center gap-2 cursor-pointer border-none"
+              >
+                {backingUp ? (
+                  <>
+                    <div className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                    Yedekleniyor...
+                  </>
+                ) : (
+                  "Yedek Oluştur (.bak)"
+                )}
+              </button>
+
+              {backupMessage && (
+                <div
+                  className={`p-3 rounded-xl text-xs font-bold border ${
+                    backupMessage.type === "success"
+                      ? "bg-indigo-50 text-indigo-700 border-indigo-100"
+                      : backupMessage.type === "error"
+                        ? "bg-red-50 text-red-700 border-red-100"
+                        : "bg-slate-50 text-slate-600 border-slate-200"
+                  } animate-in fade-in duration-300`}
+                >
+                  {backupMessage.text}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Card 3: Yedeklerden Tahmin Yükle */}
+          <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm hover:shadow-md hover:-translate-y-1 transition-all duration-300 flex flex-col justify-between h-full">
+            <div>
+              <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center mb-4 select-none">
+                <svg
+                  className={`w-6 h-6 text-amber-600 ${restoring ? "animate-pulse" : ""}`}
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  viewBox="0 0 24 24"
+                >
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" x2="12" y1="15" y2="3" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-black text-slate-800 mb-2">
+                Yedeklerden Yükle
+              </h3>
+              <p className="text-gray-500 text-xs font-semibold leading-relaxed mb-4">
+                Daha önce aldığınız bir `.bak` yedek dosyasını seçerek tahmin
+                veritabanınızı eski haline getirin.
+              </p>
+            </div>
+
+            <div className="space-y-3 mt-4">
+              <button
+                onClick={handleRestore}
+                disabled={restoring}
+                className="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 px-4 rounded-xl shadow-md hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-xs flex items-center justify-center gap-2 cursor-pointer border-none"
+              >
+                {restoring ? (
+                  <>
+                    <div className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                    Yükleniyor...
+                  </>
+                ) : (
+                  "Yedek Yükle (.bak)"
+                )}
+              </button>
+
+              {restoreMessage && (
+                <div
+                  className={`p-3 rounded-xl text-xs font-bold border ${
+                    restoreMessage.type === "success"
+                      ? "bg-amber-50 text-amber-700 border-amber-100"
+                      : restoreMessage.type === "error"
+                        ? "bg-red-50 text-red-700 border-red-100"
+                        : "bg-slate-50 text-slate-600 border-slate-200"
+                  } animate-in fade-in duration-300`}
+                >
+                  {restoreMessage.text}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -1401,6 +1787,24 @@ function App() {
               className={`px-5 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 ${view === "form" ? "bg-white text-emerald-700 shadow-sm" : "text-gray-600 hover:text-gray-900 hover:bg-gray-200"}`}
             >
               + Yeni Tahmin
+            </button>
+            <button
+              onClick={() => setView("settings")}
+              className={`px-5 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 ${view === "settings" ? "bg-white text-emerald-700 shadow-sm" : "text-gray-600 hover:text-gray-900 hover:bg-gray-200"}`}
+            >
+              <svg
+                className="w-4 h-4 mr-1.5 inline-block align-text-bottom"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                viewBox="0 0 24 24"
+              >
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+              Ayarlar
             </button>
           </nav>
         </header>
@@ -2466,6 +2870,9 @@ function App() {
 
         {/* Program View */}
         {view === "program" && renderProgram()}
+
+        {/* Settings View */}
+        {view === "settings" && renderSettings()}
       </div>
     </div>
   );

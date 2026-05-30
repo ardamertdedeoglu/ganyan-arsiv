@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
-var db *sql.DB
+var (
+	db      *sql.DB
+	dbMutex sync.RWMutex
+)
 
 type Prediction struct {
 	ID          int64     `json:"id"`
@@ -31,18 +35,39 @@ type Leg struct {
 	WinnerHorse int   `json:"winner_horse"`
 }
 
-func InitDB() error {
+func getDBPath() (string, error) {
 	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "ganyan-arsiv", "ganyan.db"), nil
+}
+
+func CloseDB() error {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+	if db != nil {
+		err := db.Close()
+		db = nil
+		return err
+	}
+	return nil
+}
+
+func InitDB() error {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
+	dbPath, err := getDBPath()
 	if err != nil {
 		return err
 	}
 
-	appDir := filepath.Join(configDir, "ganyan-arsiv")
+	appDir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(appDir, 0755); err != nil {
 		return err
 	}
 
-	dbPath := filepath.Join(appDir, "ganyan.db")
 	db, err = sql.Open("sqlite", dbPath)
 	if err != nil {
 		return err
@@ -75,6 +100,9 @@ func InitDB() error {
 }
 
 func savePredictionToDB(p Prediction) error {
+	dbMutex.RLock()
+	defer dbMutex.RUnlock()
+
 	legsJSON, err := json.Marshal(p.Legs)
 	if err != nil {
 		return err
@@ -94,6 +122,9 @@ func savePredictionToDB(p Prediction) error {
 }
 
 func getPredictionsFromDB() ([]Prediction, error) {
+	dbMutex.RLock()
+	defer dbMutex.RUnlock()
+
 	rows, err := db.Query(`SELECT id, date, city, race_time, is_completed, created_at, legs, COALESCE(ganyan_name, ''), COALESCE(ganyan_legs, ''), COALESCE(ganyan_cost, 0.0) FROM predictions ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -118,11 +149,17 @@ func getPredictionsFromDB() ([]Prediction, error) {
 }
 
 func deletePredictionFromDB(id int64) error {
+	dbMutex.RLock()
+	defer dbMutex.RUnlock()
+
 	_, err := db.Exec(`DELETE FROM predictions WHERE id = ?`, id)
 	return err
 }
 
 func updatePredictionInDB(p Prediction) error {
+	dbMutex.RLock()
+	defer dbMutex.RUnlock()
+
 	legsJSON, err := json.Marshal(p.Legs)
 	if err != nil {
 		return err
